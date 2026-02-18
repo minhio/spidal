@@ -30,11 +30,25 @@ from spidal.persistence import (
     get_downloaded_tracks,
     get_failed_tracks,
     get_playlist_download,
+    save_nomatch,
     save_playlist_download,
 )
 from spidal.spotify import get_playlist_tracks, get_user_playlists
 
 logger = logging.getLogger(__name__)
+
+
+def _match_and_save_nomatch(config: Config, spotify_tracks: list[dict]) -> list[dict]:
+    """Match Spotify tracks by ISRC and save unmatched records to the nomatch DB."""
+    from spidal.hifi import match_spotify_tracks
+
+    matched, unmatched = match_spotify_tracks(config, spotify_tracks)
+    if unmatched:
+        db = get_db()
+        for st in unmatched:
+            save_nomatch(db, st)
+        db.close()
+    return matched
 
 _SPOTIFY_CONSOLE_URL = "https://developer.spotify.com"
 
@@ -260,6 +274,9 @@ class SpotifyWidget(Vertical):
     def _update_status(self, text: str) -> None:
         self.query_one("#playlist-status", Label).update(text)
 
+    def _set_status(self, text: str) -> None:
+        self.app.call_from_thread(self._update_status, text)
+
     def _show_progress(self, total: int, current: int) -> None:
         if total > 0:
             pct = current / total
@@ -295,7 +312,7 @@ class SpotifyWidget(Vertical):
     @work(thread=True)
     def _load_playlists(self) -> None:
         logger.info("Loading Spotify playlists")
-        self.app.call_from_thread(self._update_status, " Loading playlists...")
+        self._set_status(" Loading playlists...")
         try:
             playlists = get_user_playlists(self.config)
         except PermissionError:
@@ -318,9 +335,7 @@ class SpotifyWidget(Vertical):
             self._playlist_row_keys[i] = row_key
         db.close()
 
-        self.app.call_from_thread(
-            self._update_status, f" {len(playlists)} playlists"
-        )
+        self._set_status(f" {len(playlists)} playlists")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.data_table.cursor_row
@@ -349,64 +364,26 @@ class SpotifyWidget(Vertical):
     @work(thread=True)
     def _do_download_playlist(self, playlist: dict) -> None:
         from spidal.download import download_tracks
-        from spidal.hifi import match_track
-        from spidal.persistence import get_db, save_nomatch
 
         playlist_id = playlist.get("id", "")
         playlist_name = playlist.get("name") or "Untitled"
         logger.info("Starting playlist download: %r (id=%s)", playlist_name, playlist_id)
 
-        self.app.call_from_thread(
-            self._update_status, f" Fetching tracks for '{playlist_name}'..."
-        )
+        self._set_status(f" Fetching tracks for '{playlist_name}'...")
         try:
             spotify_tracks = get_playlist_tracks(self.config, playlist_id)
         except PermissionError:
             self.app.call_from_thread(self._show_token_setup, True)
             return
 
-        self.app.call_from_thread(
-            self._update_status,
-            f" Matching {len(spotify_tracks)} tracks...",
-        )
-
-        matched: list[dict] = []
-        unmatched: list[dict] = []
-        for st in spotify_tracks:
-            title = st.get("name", "Unknown")
-            artists = ", ".join(a["name"] for a in st.get("artists", []))
-            isrc = st.get("external_ids", {}).get("isrc")
-            if not isrc:
-                unmatched.append(st)
-                continue
-            track = match_track(self.config, f"{artists} {title}", isrc)
-            if track:
-                track["album"] = st.get("album", {}).get("name") or track.get("album")
-                matched.append(track)
-            else:
-                unmatched.append(st)
-
-        logger.info(
-            "Playlist %r: %d matched, %d unmatched out of %d",
-            playlist_name, len(matched), len(unmatched), len(spotify_tracks),
-        )
-        if unmatched:
-            db = get_db()
-            from spidal.persistence import save_nomatch
-            for st in unmatched:
-                save_nomatch(db, st)
-            db.close()
+        self._set_status(f" Matching {len(spotify_tracks)} tracks...")
+        matched = _match_and_save_nomatch(self.config, spotify_tracks)
 
         if not matched:
-            self.app.call_from_thread(
-                self._update_status, " No tracks could be matched."
-            )
+            self._set_status(" No tracks could be matched.")
             return
 
-        self.app.call_from_thread(
-            self._update_status,
-            f" Matched {len(matched)}/{len(spotify_tracks)}. Downloading...",
-        )
+        self._set_status(f" Matched {len(matched)}/{len(spotify_tracks)}. Downloading...")
 
         def _on_progress(
             current: int, total: int, status: str, _path: str | None
@@ -419,7 +396,7 @@ class SpotifyWidget(Vertical):
             self._mark_playlist_downloaded, playlist, counts["downloaded"], total
         )
         msg = f" Done: {counts['downloaded']} downloaded, {counts['failed']} failed"
-        self.app.call_from_thread(self._update_status, msg)
+        self._set_status(msg)
         self.app.call_from_thread(self.app.notify, msg.strip())
 
     def _mark_playlist_downloaded(
@@ -544,6 +521,9 @@ class LibraryWidget(Vertical):
     def _update_status(self, text: str) -> None:
         self.query_one("#library-status", Label).update(text)
 
+    def _set_status(self, text: str) -> None:
+        self.app.call_from_thread(self._update_status, text)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = event.data_table.cursor_row
         if event.data_table.id == "downloaded-table":
@@ -596,17 +576,13 @@ class LibraryWidget(Vertical):
         artist = track.get("artist") or "Unknown"
         album = track.get("album") or "Unknown"
         logger.info("Reprocessing failed track: %s - %s", artist, title)
-        self.app.call_from_thread(self._update_status, f" Retrying: {artist} - {title}...")
+        self._set_status(f" Retrying: {artist} - {title}...")
         status, path = download_track(self.config, track, artist, album)
         if status in ("downloaded", "skipped"):
-            self.app.call_from_thread(
-                self._update_status, f" Downloaded: {path}"
-            )
+            self._set_status(f" Downloaded: {path}")
             self._load()
         else:
-            self.app.call_from_thread(
-                self._update_status, f" Failed again: {artist} - {title}"
-            )
+            self._set_status(f" Failed again: {artist} - {title}")
 
     @work(thread=True)
     def _reprocess_nomatch(self, record: dict) -> None:
@@ -617,28 +593,24 @@ class LibraryWidget(Vertical):
         album = record.get("album") or ""
         isrc = record.get("isrc") or ""
         logger.info("Reprocessing nomatch: %s - %s (ISRC=%s)", artist, title, isrc)
-        self.app.call_from_thread(self._update_status, f" Matching: {artist} - {title}...")
+        self._set_status(f" Matching: {artist} - {title}...")
         track = match_track(self.config, f"{artist} {title}", isrc)
         if not track:
-            self.app.call_from_thread(
-                self._update_status, f" Still no match: {artist} - {title}"
-            )
+            self._set_status(f" Still no match: {artist} - {title}")
             return
         track["album"] = album or track.get("album")
-        self.app.call_from_thread(self._update_status, f" Downloading: {artist} - {title}...")
+        self._set_status(f" Downloading: {artist} - {title}...")
         status, path = download_track(self.config, track, artist, album or "Unknown")
         if status in ("downloaded", "skipped"):
-            self.app.call_from_thread(self._update_status, f" Downloaded: {path}")
+            self._set_status(f" Downloaded: {path}")
             self._load()
         else:
-            self.app.call_from_thread(
-                self._update_status, f" Download failed: {artist} - {title}"
-            )
+            self._set_status(f" Download failed: {artist} - {title}")
 
     @work(thread=True)
     def _load(self) -> None:
         logger.info("Loading library from database")
-        self.app.call_from_thread(self._update_status, " Loading library...")
+        self._set_status(" Loading library...")
         db = get_db()
         tracks = get_downloaded_tracks(db)
         nomatch = get_all_nomatch(db)
@@ -648,15 +620,21 @@ class LibraryWidget(Vertical):
             "Library loaded: %d downloaded, %d nomatch, %d failed",
             len(tracks), len(nomatch), len(failed),
         )
-
         self._downloaded_tracks = tracks
         self._nomatch_tracks = nomatch
         self._failed_tracks = failed
+        self._populate_downloaded_table(tracks)
+        self._populate_nomatch_table(nomatch)
+        self._populate_failed_table(failed)
+        self._set_status(
+            f" {len(tracks)} downloaded, {len(nomatch)} unmatched, {len(failed)} failed"
+        )
 
-        dl_table = self.query_one("#downloaded-table", DataTable)
-        dl_table.clear()
+    def _populate_downloaded_table(self, tracks: list[dict]) -> None:
+        table = self.query_one("#downloaded-table", DataTable)
+        table.clear()
         for i, rec in enumerate(tracks):
-            dl_table.add_row(
+            table.add_row(
                 str(i + 1),
                 rec.get("title") or "",
                 rec.get("artist") or "",
@@ -664,10 +642,11 @@ class LibraryWidget(Vertical):
                 rec.get("file_path") or "",
             )
 
-        nomatch_table = self.query_one("#nomatch-table", DataTable)
-        nomatch_table.clear()
-        for i, rec in enumerate(nomatch):
-            nomatch_table.add_row(
+    def _populate_nomatch_table(self, records: list[dict]) -> None:
+        table = self.query_one("#nomatch-table", DataTable)
+        table.clear()
+        for i, rec in enumerate(records):
+            table.add_row(
                 str(i + 1),
                 rec.get("title") or "",
                 rec.get("artist") or "",
@@ -675,21 +654,17 @@ class LibraryWidget(Vertical):
                 rec.get("isrc") or "",
             )
 
-        fail_table = self.query_one("#failed-table", DataTable)
-        fail_table.clear()
-        for i, rec in enumerate(failed):
-            fail_table.add_row(
+    def _populate_failed_table(self, tracks: list[dict]) -> None:
+        table = self.query_one("#failed-table", DataTable)
+        table.clear()
+        for i, rec in enumerate(tracks):
+            table.add_row(
                 str(i + 1),
                 rec.get("title") or "",
                 rec.get("artist") or "",
                 rec.get("album") or "",
                 rec.get("isrc") or "",
             )
-
-        self.app.call_from_thread(
-            self._update_status,
-            f" {len(tracks)} downloaded, {len(nomatch)} unmatched, {len(failed)} failed",
-        )
 
     def action_reload(self) -> None:
         self._load()
@@ -817,6 +792,9 @@ class GetWidget(Vertical):
     def _update_status(self, text: str) -> None:
         self.query_one("#get-status", Label).update(text)
 
+    def _set_status(self, text: str) -> None:
+        self.app.call_from_thread(self._update_status, text)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "download-all-btn":
             self.action_download_all()
@@ -839,104 +817,37 @@ class GetWidget(Vertical):
             _MONOCHROME_TRACK_RE,
             _SPOTIFY_RE,
         )
-        from spidal.download import download_track, download_tracks
-        from spidal.hifi import get_album_tracks, get_track_info, match_track
-        from spidal.persistence import get_db, save_nomatch
 
         total = len(urls)
         downloaded = 0
         failed = 0
 
         for i, url in enumerate(urls):
-            self.app.call_from_thread(
-                self._update_status, f" [{i + 1}/{total}] {url[:70]}"
-            )
+            self._set_status(f" [{i + 1}/{total}] {url[:70]}")
             try:
                 m = _MONOCHROME_TRACK_RE.match(url)
                 if m:
-                    info = get_track_info(self.config, int(m.group(1)))
-                    if not info:
-                        failed += 1
-                        continue
-                    status, _ = download_track(
-                        self.config,
-                        info,
-                        info.get("artist") or "Unknown",
-                        info.get("album") or "Unknown",
-                    )
-                    if status in ("downloaded", "skipped"):
-                        downloaded += 1
-                    else:
-                        failed += 1
+                    d, f = self._handle_monochrome_track(int(m.group(1)))
+                    downloaded += d
+                    failed += f
                     continue
 
                 m = _MONOCHROME_ALBUM_RE.match(url)
                 if m:
-                    _, tracks = get_album_tracks(self.config, int(m.group(1)))
-                    counts = download_tracks(self.config, tracks)
-                    downloaded += counts["downloaded"]
-                    failed += counts["failed"]
+                    d, f = self._handle_monochrome_album(int(m.group(1)))
+                    downloaded += d
+                    failed += f
                     continue
 
                 m = _SPOTIFY_RE.match(url)
                 if m:
                     if not self.config.spotify_token:
-                        self.app.call_from_thread(
-                            self._update_status,
-                            " Spotify token not set — skipping Spotify URLs",
-                        )
+                        self._set_status(" Spotify token not set — skipping Spotify URLs")
                         failed += 1
                         continue
-
-                    resource_type, resource_id = m.group(1), m.group(2)
-
-                    if resource_type == "track":
-                        from spidal.spotify import get_track
-                        data = get_track(self.config, url)
-                        title = data.get("name", "Unknown")
-                        artists = ", ".join(a["name"] for a in data.get("artists", []))
-                        isrc = data.get("external_ids", {}).get("isrc")
-                        if not isrc:
-                            failed += 1
-                            continue
-                        track = match_track(self.config, f"{artists} {title}", isrc)
-                        if not track:
-                            db = get_db()
-                            save_nomatch(db, data)
-                            db.close()
-                            failed += 1
-                            continue
-                        album = data.get("album", {}).get("name", "Unknown")
-                        status, _ = download_track(self.config, track, artists, album)
-                        if status in ("downloaded", "skipped"):
-                            downloaded += 1
-                        else:
-                            failed += 1
-
-                    elif resource_type == "album":
-                        from spidal.spotify import (
-                            get_album_tracks as sp_get_album_tracks,
-                            get_tracks,
-                        )
-                        album_info, tracks = sp_get_album_tracks(self.config, resource_id)
-                        album_name = album_info.get("name", "Unknown")
-                        track_ids = [t["id"] for t in tracks if t.get("id")]
-                        full_tracks = get_tracks(self.config, track_ids)
-                        for t in full_tracks:
-                            t.setdefault("album", {})["name"] = album_name
-                        matched = self._match_tracks(full_tracks)
-                        counts = download_tracks(self.config, matched)
-                        downloaded += counts["downloaded"]
-                        failed += counts["failed"]
-
-                    elif resource_type == "playlist":
-                        from spidal.spotify import get_playlist_tracks
-                        tracks = get_playlist_tracks(self.config, resource_id)
-                        matched = self._match_tracks(tracks)
-                        counts = download_tracks(self.config, matched)
-                        downloaded += counts["downloaded"]
-                        failed += counts["failed"]
-
+                    d, f = self._handle_spotify_url(url, m.group(1), m.group(2))
+                    downloaded += d
+                    failed += f
                     continue
 
                 logger.warning("Unrecognized URL: %s", url)
@@ -946,39 +857,80 @@ class GetWidget(Vertical):
                 logger.error("Error processing %s: %s", url, e)
                 failed += 1
 
-        self.app.call_from_thread(
-            self._update_status,
-            f" Done: {downloaded} downloaded, {failed} failed",
-        )
+        self._set_status(f" Done: {downloaded} downloaded, {failed} failed")
         self.app.call_from_thread(self._clear_inputs)
 
-    def _match_tracks(self, spotify_tracks: list[dict]) -> list[dict]:
-        """Match Spotify tracks by ISRC, saving unmatched to the nomatch table."""
-        from spidal.hifi import match_track
-        from spidal.persistence import get_db, save_nomatch
+    def _handle_monochrome_track(self, track_id: int) -> tuple[int, int]:
+        from spidal.download import download_track
+        from spidal.hifi import get_track_info
 
-        matched = []
-        unmatched = []
-        for st in spotify_tracks:
-            title = st.get("name", "Unknown")
-            artists = ", ".join(a["name"] for a in st.get("artists", []))
-            isrc = st.get("external_ids", {}).get("isrc")
+        info = get_track_info(self.config, track_id)
+        if not info:
+            return 0, 1
+        status, _ = download_track(
+            self.config,
+            info,
+            info.get("artist") or "Unknown",
+            info.get("album") or "Unknown",
+        )
+        return (1, 0) if status in ("downloaded", "skipped") else (0, 1)
+
+    def _handle_monochrome_album(self, album_id: int) -> tuple[int, int]:
+        from spidal.download import download_tracks
+        from spidal.hifi import get_album_tracks
+
+        _, tracks = get_album_tracks(self.config, album_id)
+        counts = download_tracks(self.config, tracks)
+        return counts["downloaded"], counts["failed"]
+
+    def _handle_spotify_url(
+        self, url: str, resource_type: str, resource_id: str
+    ) -> tuple[int, int]:
+        from spidal.download import download_track, download_tracks
+
+        if resource_type == "track":
+            from spidal.hifi import match_track
+            from spidal.persistence import get_db, save_nomatch
+            from spidal.spotify import get_track
+
+            data = get_track(self.config, url)
+            title = data.get("name", "Unknown")
+            artists = ", ".join(a["name"] for a in data.get("artists", []))
+            isrc = data.get("external_ids", {}).get("isrc")
             if not isrc:
-                continue
+                return 0, 1
             track = match_track(self.config, f"{artists} {title}", isrc)
-            if track:
-                track["album"] = st.get("album", {}).get("name") or track.get("album")
-                matched.append(track)
-            else:
-                unmatched.append(st)
+            if not track:
+                db = get_db()
+                save_nomatch(db, data)
+                db.close()
+                return 0, 1
+            album = data.get("album", {}).get("name", "Unknown")
+            status, _ = download_track(self.config, track, artists, album)
+            return (1, 0) if status in ("downloaded", "skipped") else (0, 1)
 
-        if unmatched:
-            db = get_db()
-            for st in unmatched:
-                save_nomatch(db, st)
-            db.close()
+        if resource_type == "album":
+            from spidal.spotify import get_album_tracks as sp_get_album_tracks, get_tracks
 
-        return matched
+            album_info, tracks = sp_get_album_tracks(self.config, resource_id)
+            album_name = album_info.get("name", "Unknown")
+            track_ids = [t["id"] for t in tracks if t.get("id")]
+            full_tracks = get_tracks(self.config, track_ids)
+            for t in full_tracks:
+                t.setdefault("album", {})["name"] = album_name
+            matched = _match_and_save_nomatch(self.config, full_tracks)
+            counts = download_tracks(self.config, matched)
+            return counts["downloaded"], counts["failed"]
+
+        if resource_type == "playlist":
+            from spidal.spotify import get_playlist_tracks
+
+            tracks = get_playlist_tracks(self.config, resource_id)
+            matched = _match_and_save_nomatch(self.config, tracks)
+            counts = download_tracks(self.config, matched)
+            return counts["downloaded"], counts["failed"]
+
+        return 0, 1
 
 
 class SpidalApp(App):

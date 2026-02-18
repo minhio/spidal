@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import musicbrainzngs
-import pytest
 from mutagen.flac import FLAC
 
 from spidal.tagging import tag_flac

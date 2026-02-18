@@ -12,7 +12,7 @@ from mutagen.oggvorbis import OggVorbis
 
 logger = logging.getLogger(__name__)
 
-musicbrainzngs.set_useragent("spidal", "0.1", "https://github.com/spidal/spidal")
+musicbrainzngs.set_useragent("spidal", "0.1", "https://github.com/minhio/spidal")
 musicbrainzngs.set_rate_limit(limit_or_interval=1.0)
 
 
@@ -118,8 +118,8 @@ def _artist_credit_name(credits: list) -> str:
     return "".join(parts).strip()
 
 
-def _build_tags(track: dict, artist: str, album: str) -> dict[str, str]:
-    """Build a neutral tag dict from hifi data enriched with MusicBrainz lookups.
+def _build_base_tags(track: dict, artist: str, album: str) -> dict[str, str]:
+    """Build tags from hifi data only (no MusicBrainz calls).
 
     Keys use VorbisComment naming (TITLE, ARTIST, TRACKNUMBER, etc.).
     Values are always strings.
@@ -139,52 +139,64 @@ def _build_tags(track: dict, artist: str, album: str) -> dict[str, str]:
         tags["TRACKNUMBER"] = str(int(track_number))
     if isrc:
         tags["ISRC"] = isrc
+    return tags
 
+
+def _enrich_with_mb(tags: dict[str, str], isrc: str) -> None:
+    """Enrich a tag dict in-place with MusicBrainz data."""
+    recording = _lookup_isrc(isrc)
+    if not recording:
+        return
+
+    recording_mbid = recording.get("id", "")
+    if recording_mbid:
+        tags["MUSICBRAINZ_TRACKID"] = recording_mbid
+
+    recording_detail = _lookup_recording(recording_mbid) if recording_mbid else None
+    genre = _best_genre(recording_detail or {})
+    if genre:
+        tags["GENRE"] = genre
+
+    release = _best_release(recording)
+    if not release:
+        return
+
+    date = release.get("date", "")
+    if date:
+        tags["DATE"] = date
+
+    release_mbid = release.get("id", "")
+    if release_mbid:
+        tags["MUSICBRAINZ_ALBUMID"] = release_mbid
+
+    credits = release.get("artist-credit", [])
+    if credits:
+        album_artist = _artist_credit_name(credits)
+        if album_artist:
+            tags["ALBUMARTIST"] = album_artist
+
+        first = credits[0] if credits else {}
+        if isinstance(first, dict):
+            artist_mbid = first.get("artist", {}).get("id", "")
+            if artist_mbid:
+                tags["MUSICBRAINZ_ARTISTID"] = artist_mbid
+
+    if release_mbid and recording_mbid:
+        disc_num, disc_total, track_total = _lookup_release(release_mbid, recording_mbid)
+        if disc_num is not None:
+            tags["DISCNUMBER"] = str(disc_num)
+        if disc_total is not None:
+            tags["DISCTOTAL"] = str(disc_total)
+        if track_total is not None:
+            tags["TRACKTOTAL"] = str(track_total)
+
+
+def _build_tags(track: dict, artist: str, album: str) -> dict[str, str]:
+    """Build a neutral tag dict from hifi data enriched with MusicBrainz lookups."""
+    tags = _build_base_tags(track, artist, album)
+    isrc = tags.get("ISRC", "")
     if isrc:
-        recording = _lookup_isrc(isrc)
-        if recording:
-            recording_mbid = recording.get("id", "")
-            if recording_mbid:
-                tags["MUSICBRAINZ_TRACKID"] = recording_mbid
-
-            recording_detail = _lookup_recording(recording_mbid) if recording_mbid else None
-            genre = _best_genre(recording_detail or {})
-            if genre:
-                tags["GENRE"] = genre
-
-            release = _best_release(recording)
-            if release:
-                date = release.get("date", "")
-                if date:
-                    tags["DATE"] = date
-
-                release_mbid = release.get("id", "")
-                if release_mbid:
-                    tags["MUSICBRAINZ_ALBUMID"] = release_mbid
-
-                credits = release.get("artist-credit", [])
-                if credits:
-                    album_artist = _artist_credit_name(credits)
-                    if album_artist:
-                        tags["ALBUMARTIST"] = album_artist
-
-                    first = credits[0] if credits else {}
-                    if isinstance(first, dict):
-                        artist_mbid = first.get("artist", {}).get("id", "")
-                        if artist_mbid:
-                            tags["MUSICBRAINZ_ARTISTID"] = artist_mbid
-
-                if release_mbid and recording_mbid:
-                    disc_num, disc_total, track_total = _lookup_release(
-                        release_mbid, recording_mbid
-                    )
-                    if disc_num is not None:
-                        tags["DISCNUMBER"] = str(disc_num)
-                    if disc_total is not None:
-                        tags["DISCTOTAL"] = str(disc_total)
-                    if track_total is not None:
-                        tags["TRACKTOTAL"] = str(track_total)
-
+        _enrich_with_mb(tags, isrc)
     return tags
 
 

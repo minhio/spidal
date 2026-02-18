@@ -170,6 +170,58 @@ def _persist(
         logger.warning("Failed to persist track %s", track_id, exc_info=True)
 
 
+def _attempt_streams(
+    streams: object,
+    file_path: Path,
+    on_progress: Callable[[int, int], None] | None,
+) -> bool:
+    """Try each stream URL, cleaning up between attempts. Returns True on success."""
+    for stream in streams:  # type: ignore[union-attr]
+        if isinstance(stream, list):
+            logger.info("Downloading %d DASH segments", len(stream))
+            ok = _download_dash(stream, file_path, on_progress)
+        else:
+            logger.info("Downloading from %s", stream[:80])
+            ok = _download_direct(stream, file_path, on_progress)
+
+        if ok and file_path.stat().st_size >= MIN_FILE_SIZE:
+            return True
+
+        if ok:
+            logger.warning(
+                "File too small (%d bytes), likely corrupted", file_path.stat().st_size
+            )
+        logger.info("Retrying with next API endpoint")
+        _cleanup(file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    return False
+
+
+def _tag_file(
+    config: Config,
+    file_path: Path,
+    track: dict,
+    artist: str,
+    album: str,
+) -> None:
+    """Tag the downloaded file using the appropriate tagger for its format."""
+    if config.disable_tagging and config.disable_tagging.lower() not in ("false", "0", ""):
+        logger.info("Tagging disabled, skipping: %s", file_path.name)
+        return
+    _TAGGERS = {
+        ".flac": tag_flac,
+        ".m4a": tag_m4a,
+        ".ogg": tag_ogg,
+        ".webm": tag_webm,
+    }
+    tagger = _TAGGERS.get(file_path.suffix)
+    if tagger:
+        tagger(str(file_path), track, artist, album)
+    else:
+        logger.warning("No tagger for format %s: %s", file_path.suffix, file_path.name)
+
+
 def download_track(
     config: Config,
     track: dict,
@@ -203,19 +255,9 @@ def download_track(
 
     if file_path.exists():
         logger.info("Already exists: %s", file_path)
-        _persist(
-            track,
-            track_id,
-            title,
-            artist,
-            album,
-            track_number,
-            "downloaded",
-            str(file_path),
-        )
+        _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
         return "skipped", str(file_path)
 
-    # Try each API endpoint until one produces a successful download
     try:
         streams = iter_stream_urls(config, track_id)
     except ConnectionError as e:
@@ -225,31 +267,7 @@ def download_track(
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    ok = False
-    for stream in streams:
-        if isinstance(stream, list):
-            logger.info(
-                "Downloading %d DASH segments for track %s", len(stream), track_id
-            )
-            ok = _download_dash(stream, file_path, on_progress)
-        else:
-            logger.info("Downloading track %s from %s", track_id, stream[:80])
-            ok = _download_direct(stream, file_path, on_progress)
-
-        if ok and file_path.stat().st_size >= MIN_FILE_SIZE:
-            break
-
-        if ok:
-            logger.warning(
-                "File too small (%d bytes), likely corrupted", file_path.stat().st_size
-            )
-
-        logger.info("Retrying with next API endpoint for track %s", track_id)
-        _cleanup(file_path)
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        ok = False
-
-    if not ok:
+    if not _attempt_streams(streams, file_path, on_progress):
         _cleanup(file_path)
         _persist(track, track_id, title, artist, album, track_number, "failed")
         return "failed", None
@@ -263,31 +281,8 @@ def download_track(
         logger.info("Renamed to %s (actual format: %s)", file_path.name, actual_ext)
 
     logger.info("Downloaded: %s", file_path)
-    _persist(
-        track,
-        track_id,
-        title,
-        artist,
-        album,
-        track_number,
-        "downloaded",
-        str(file_path),
-    )
-
-    if config.disable_tagging and config.disable_tagging.lower() not in ("false", "0", ""):
-        logger.info("Tagging disabled, skipping: %s", file_path.name)
-    else:
-        _TAGGERS = {
-            ".flac": tag_flac,
-            ".m4a": tag_m4a,
-            ".ogg": tag_ogg,
-            ".webm": tag_webm,
-        }
-        tagger = _TAGGERS.get(file_path.suffix)
-        if tagger:
-            tagger(str(file_path), track, artist, album)
-        else:
-            logger.warning("No tagger for format %s: %s", file_path.suffix, file_path.name)
+    _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
+    _tag_file(config, file_path, track, artist, album)
 
     return "downloaded", str(file_path)
 

@@ -1,5 +1,7 @@
 import logging
 import re
+from collections.abc import Callable
+from typing import Any
 
 import typer
 
@@ -19,18 +21,22 @@ def _ensure_spotify_token(config: Config) -> None:
     ensure_token(config)
 
 
-def _get_spotify_track(config: Config, track_arg: str) -> dict:
-    """Fetch Spotify track data, handling token refresh."""
-    from spidal.spotify import get_track
-
+def _with_spotify_auth(config: Config, fn: Callable[..., Any], *args: Any) -> Any:
+    """Call fn(config, *args), prompting for a new token on PermissionError."""
     _ensure_spotify_token(config)
     try:
-        return get_track(config, track_arg)
+        return fn(config, *args)
     except PermissionError:
         logger.warning("Spotify token expired, prompting for refresh")
         typer.echo("Spotify token expired. Please provide a new one.")
         refresh_token(config)
-        return get_track(config, track_arg)
+        return fn(config, *args)
+
+
+def _get_spotify_track(config: Config, track_arg: str) -> dict:
+    """Fetch Spotify track data, handling token refresh."""
+    from spidal.spotify import get_track
+    return _with_spotify_auth(config, get_track, track_arg)
 
 
 def _download_monochrome_track(config: Config, track_id: int) -> None:
@@ -112,41 +118,24 @@ def _download_spotify_track(config: Config, url: str) -> None:
 
 
 def _match_spotify_tracks(config: Config, spotify_tracks: list[dict]) -> list[dict]:
-    """Match a list of Spotify tracks by ISRC. Returns matched hifi tracks."""
-    from spidal.hifi import match_track
+    """Match Spotify tracks by ISRC, echoing results and saving unmatched to DB."""
+    from spidal.hifi import match_spotify_tracks as _do_match
     from spidal.persistence import get_db, save_nomatch
 
-    matched = []
-    unmatched: list[dict] = []
-    for st in spotify_tracks:
-        title = st.get("name", "Unknown")
+    matched, unmatched = _do_match(config, spotify_tracks)
+    for st in unmatched:
         artists = ", ".join(a["name"] for a in st.get("artists", []))
+        title = st.get("name", "Unknown")
         isrc = st.get("external_ids", {}).get("isrc")
-
         if not isrc:
-            logger.warning("No ISRC for: %s - %s, skipping", artists, title)
             typer.echo(f"  Skipping (no ISRC): {artists} - {title}")
-            continue
-
-        track = match_track(config, f"{artists} {title}", isrc)
-        if track:
-            # Preserve Spotify album name for directory structure
-            track["album"] = st.get("album", {}).get("name") or track.get("album")
-            matched.append(track)
         else:
             typer.echo(f"  No match: {artists} - {title} (ISRC: {isrc})")
-            unmatched.append(st)
-
-    logger.info(
-        "Matching complete: %d matched, %d unmatched out of %d",
-        len(matched), len(unmatched), len(spotify_tracks),
-    )
     if unmatched:
         db = get_db()
         for st in unmatched:
             save_nomatch(db, st)
         db.close()
-
     return matched
 
 
@@ -155,14 +144,7 @@ def _download_spotify_album(config: Config, album_id: str) -> None:
     from spidal.download import download_tracks
     from spidal.spotify import get_album_tracks, get_tracks
 
-    _ensure_spotify_token(config)
-    try:
-        album_info, tracks = get_album_tracks(config, album_id)
-    except PermissionError:
-        logger.warning("Spotify token expired fetching album %s, prompting for refresh", album_id)
-        typer.echo("Spotify token expired. Please provide a new one.")
-        refresh_token(config)
-        album_info, tracks = get_album_tracks(config, album_id)
+    album_info, tracks = _with_spotify_auth(config, get_album_tracks, album_id)
 
     album_name = album_info.get("name", "Unknown")
     album_artists = ", ".join(a["name"] for a in album_info.get("artists", []))
@@ -198,14 +180,7 @@ def _download_spotify_playlist(config: Config, playlist_id: str) -> None:
     from spidal.download import download_tracks
     from spidal.spotify import get_playlist_tracks
 
-    _ensure_spotify_token(config)
-    try:
-        tracks = get_playlist_tracks(config, playlist_id)
-    except PermissionError:
-        logger.warning("Spotify token expired fetching playlist %s, prompting for refresh", playlist_id)
-        typer.echo("Spotify token expired. Please provide a new one.")
-        refresh_token(config)
-        tracks = get_playlist_tracks(config, playlist_id)
+    tracks = _with_spotify_auth(config, get_playlist_tracks, playlist_id)
 
     typer.echo(f"Playlist: {len(tracks)} tracks")
     typer.echo("Matching tracks...")
@@ -230,14 +205,7 @@ def _download_liked(config: Config) -> None:
     from spidal.download import download_tracks
     from spidal.spotify import get_liked_tracks
 
-    _ensure_spotify_token(config)
-    try:
-        tracks = get_liked_tracks(config)
-    except PermissionError:
-        logger.warning("Spotify token expired fetching liked tracks, prompting for refresh")
-        typer.echo("Spotify token expired. Please provide a new one.")
-        refresh_token(config)
-        tracks = get_liked_tracks(config)
+    tracks = _with_spotify_auth(config, get_liked_tracks)
 
     typer.echo(f"Liked tracks: {len(tracks)}")
     typer.echo("Matching tracks...")

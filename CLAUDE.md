@@ -42,9 +42,9 @@ Spidal is a FLAC downloader with a single `spidal` entrypoint:
 
 The callback calls `setup_logging()` then `Config.load()` with CLI args as overrides. Config resolution priority: CLI args > config file (`$XDG_CONFIG_HOME/spidal/config.json`) > env vars (`SPIDAL_` prefix) > defaults. CLI args are persisted to the config file.
 
-`Config.get_apis()` lazily fetches and health-checks API endpoints, caching the result. `Config.next_api()` round-robins through available endpoints via `itertools.cycle`.
+`Config.get_apis()` lazily loads and caches the API endpoint list. The list comes from either `hifi_api` (single direct URL) or `hifi_api_file` (URL or path to a JSON file with an `"api"` list); these are mutually exclusive. `_load_apis_from_source(source)` is the module-level helper that does the actual fetch/parse.
 
-`hifi_api` (single endpoint) and `hifi_api_file` (JSON list source, local or URL) are mutually exclusive.
+`hifi.py` shuffles the endpoint list per request and tries each in turn. `match_spotify_tracks(config, spotify_tracks)` in `hifi.py` is the shared ISRC-matching helper used by both the CLI (`commands/get.py`) and TUI (`tui.py`); it returns `(matched, unmatched)` without any I/O or DB access.
 
 ### Download pipeline
 
@@ -74,7 +74,7 @@ The callback calls `setup_logging()` then `Config.load()` with CLI args as overr
 2. `get_recording_by_id(mbid, includes=["tags"])` — fetches tag/genre data; `genres` is **not** a valid include here, only `tags`
 3. `get_release_by_id(mbid, includes=["recordings", "media"])` — yields `DISCNUMBER`, `DISCTOTAL`, `TRACKTOTAL`
 
-**Shared logic** — `_build_tags()` builds a neutral `dict[str, str]` using VorbisComment key names. `tag_flac` and `tag_ogg` both call `_write_vorbiscomment()` with this dict. `tag_m4a` maps it to iTunes keys (`©nam`, `©ART`, `trkn`, `disk`, freeform `----:com.apple.iTunes:*`).
+**Shared logic** — `_build_tags()` orchestrates two steps: `_build_base_tags()` (hifi data only — title, artist, album, track number, ISRC) and `_enrich_with_mb()` (in-place MusicBrainz enrichment). `tag_flac` and `tag_ogg` call `_write_vorbiscomment()` with the result. `tag_m4a` maps it to iTunes keys (`©nam`, `©ART`, `trkn`, `disk`, freeform `----:com.apple.iTunes:*`).
 
 Genre resolution: `genre-list` preferred over `tag-list`; highest vote-count wins; title-cased on write.
 
@@ -91,6 +91,10 @@ All tagging functions are best-effort — errors are logged and swallowed, never
 Key pattern for tab activation in `SpidalApp.on_tabbed_content_tab_activated`: guard with `event.tabbed_content.id != "main-tabs"` and call `enable_focus()`/`focus_active_table()` on the newly activated widget.
 
 `SearchWidget` has `can_focus_children = False` by default (prevents stealing focus when mounted); `enable_focus()` sets it to `True`. All DataTable mutations in worker threads must be called directly from the thread — never mix `call_from_thread` table ops with direct table ops (race condition).
+
+**Status helper** — `SpotifyWidget`, `LibraryWidget`, and `GetWidget` each have `_update_status(text)` (UI-thread, updates the status label) and `_set_status(text)` (thread-safe wrapper: `self.app.call_from_thread(self._update_status, text)`). Use `_set_status` inside `@work(thread=True)` methods.
+
+**Shared TUI matching** — `_match_and_save_nomatch(config, spotify_tracks)` is a module-level helper in `tui.py` that calls `hifi.match_spotify_tracks` and saves unmatched records to the nomatch DB. Both `SpotifyWidget._do_download_playlist` and `GetWidget._handle_spotify_url` use it.
 
 ### Persistence
 
@@ -113,9 +117,9 @@ Several command functions use local imports inside the function body (to defer h
 
 | What you're mocking | Correct patch path |
 |---|---|
-| `get_track_info`, `get_album_tracks`, `match_track` in `commands/get.py` | `spidal.hifi.<fn>` |
-| `download_track`, `download_tracks` in `commands/get.py` | `spidal.download.<fn>` |
-| `get_db`, `save_nomatch` in `commands/get.py` | `spidal.persistence.<fn>` |
+| `get_track_info`, `get_album_tracks`, `match_track`, `match_spotify_tracks` in `commands/get.py` or `tui.py` | `spidal.hifi.<fn>` |
+| `download_track`, `download_tracks` in `commands/get.py` or `tui.py` | `spidal.download.<fn>` |
+| `get_db`, `save_nomatch` in `commands/get.py` or `tui.py` | `spidal.persistence.<fn>` |
 | `load_config_file`, `save_config_file` in `commands/config.py` | `spidal.config.<fn>` |
 
 ### Typer exit exceptions

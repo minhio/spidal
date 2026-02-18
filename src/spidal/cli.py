@@ -1,3 +1,4 @@
+import importlib.metadata
 import logging
 from pathlib import Path
 from typing import Optional
@@ -19,6 +20,13 @@ app.command("get")(get)
 app.command("logs")(logs)
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        version = importlib.metadata.version("spidal")
+        typer.echo(version)
+        raise typer.Exit()
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -27,6 +35,9 @@ def main(
     hifi_api: Optional[str] = typer.Option(None),
     hifi_api_file: Optional[str] = typer.Option(None),
     download_dir: Optional[Path] = typer.Option(None),
+    version: Optional[bool] = typer.Option(
+        None, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
+    ),
 ) -> None:
     """FLAC downloader."""
     setup_logging()

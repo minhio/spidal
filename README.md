@@ -2,6 +2,8 @@
 
 FLAC downloader with a terminal UI and CLI. Searches the Monochrome API, matches via Spotify ISRC, and tags downloaded files with MusicBrainz metadata.
 
+> **Spotify is optional.** You can search and download tracks directly via the Search and Get tabs without any Spotify account or token. Spotify is only needed for the Spotify Playlists tab and `spidal get <spotify-url>` commands.
+
 ## Install
 
 Requires Python 3.12+
@@ -103,6 +105,14 @@ Three sub-tabs showing track records from the database. Press Enter on any row t
 | `End`  | Scroll to bottom |
 
 ## CLI commands
+
+### `spidal --version`
+
+Print the installed version and exit.
+
+```bash
+spidal --version
+```
 
 ### `spidal get <url>`
 

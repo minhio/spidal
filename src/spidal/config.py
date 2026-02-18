@@ -70,6 +70,24 @@ def save_config_file(data: dict[str, str]) -> None:
         logger.error("Failed to save config file: %s", e)
 
 
+def _load_apis_from_source(source: str) -> list[str]:
+    """Load API list from a URL or local JSON file."""
+    if source.startswith(("http://", "https://")):
+        logger.info("Fetching API list from URL: %s", source)
+        data = requests.get(source).json()
+    else:
+        logger.info("Loading API list from file: %s", source)
+        data = json.loads(Path(source).read_text())
+
+    if not isinstance(data, dict) or "api" not in data:
+        raise ValueError("Expected JSON object with an 'api' key")
+    apis = data["api"]
+    if not isinstance(apis, list):
+        raise ValueError("Expected 'api' to be a list")
+    logger.info("Loaded APIs: %s", apis)
+    return list(apis)
+
+
 @dataclass
 class Config:
     spotify_api_url: str | None = None
@@ -135,21 +153,7 @@ class Config:
         elif not self.hifi_api_file:
             self._apis_cache = []
         else:
-            source = self.hifi_api_file
-            if source.startswith(("http://", "https://")):
-                logger.info("Fetching API list from URL: %s", source)
-                data = requests.get(source).json()
-            else:
-                logger.info("Loading API list from file: %s", source)
-                data = json.loads(Path(source).read_text())
-
-            if not isinstance(data, dict) or "api" not in data:
-                raise ValueError("Expected JSON object with an 'api' key")
-            apis = data["api"]
-            if not isinstance(apis, list):
-                raise ValueError("Expected 'api' to be a list")
-            self._apis_cache = list(apis)
-            logger.info("Loaded APIs: %s", self._apis_cache)
+            self._apis_cache = _load_apis_from_source(self.hifi_api_file)
 
         return self._apis_cache
 

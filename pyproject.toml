@@ -17,6 +17,11 @@ dependencies = [
     "typer>=0.23.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/minhio/spidal"
+Repository = "https://github.com/minhio/spidal"
+Issues = "https://github.com/minhio/spidal/issues"
+
 [project.scripts]
 spidal = "spidal.cli:app"
 

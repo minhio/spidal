@@ -45,7 +45,6 @@ def logs(
         return
 
     from rich.console import Console
-    from rich.text import Text
 
     console = Console()
     for line in lines:

@@ -4,12 +4,26 @@ from dataclasses import fields as dc_fields
 
 import typer
 
-from spidal.commands import open_directory
 from spidal.config import Config
 
 logger = logging.getLogger(__name__)
 
 config_app = typer.Typer()
+
+
+def _detect_source(
+    value: str | None,
+    env_val: str | None,
+    saved_val: str | None,
+    default: str | None,
+) -> str:
+    if saved_val is not None and value == saved_val:
+        return "file"
+    if env_val is not None and value == env_val:
+        return "env"
+    if value == default:
+        return "default"
+    return "cli"
 
 
 @config_app.callback(invoke_without_command=True)
@@ -41,15 +55,7 @@ def config_get(
     saved = load_config_file()
     saved_val = saved.get(dashed_key)
 
-    if saved_val is not None and value == saved_val:
-        source = "file"
-    elif env_val is not None and value == env_val:
-        source = "env"
-    elif value == DEFAULTS.get(dashed_key):
-        source = "default"
-    else:
-        source = "cli"
-
+    source = _detect_source(value, env_val, saved_val, DEFAULTS.get(dashed_key))
     display = value if value is not None else "(not set)"
     typer.echo(f"{dashed_key}: {display}  [{source}]")
 
@@ -92,13 +98,6 @@ def config_list(ctx: typer.Context) -> None:
         env_val = os.environ.get(f"{ENV_PREFIX}{f.name.upper()}")
         dashed = f.name.replace("_", "-")
         saved_val = saved.get(dashed)
-        if saved_val is not None and value == saved_val:
-            source = "file"
-        elif env_val is not None and value == env_val:
-            source = "env"
-        elif value == DEFAULTS.get(dashed):
-            source = "default"
-        else:
-            source = "cli"
+        source = _detect_source(value, env_val, saved_val, DEFAULTS.get(dashed))
         display = value if value is not None else "(not set)"
         typer.echo(f"{dashed}: {display}  [{source}]")
