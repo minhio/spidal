@@ -2,6 +2,7 @@
 name = "spidal"
 version = "0.1.0"
 description = "FLAC downloader with a terminal UI and CLI. Searches the Monochrome API, matches via Spotify ISRC, and tags downloaded files with MusicBrainz metadata."
+license = { file = "LICENSE" }
 readme = "README.md"
 authors = [
     { name = "Minh Nguyen", email = "983465+minhio@users.noreply.github.com" }
