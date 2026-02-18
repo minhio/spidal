@@ -1,6 +1,6 @@
 [project]
 name = "spidal"
-version = "0.1.1"
+version = "0.1.2"
 description = "FLAC downloader with a terminal UI and CLI. Searches the Monochrome API, matches via Spotify ISRC, and tags downloaded files with MusicBrainz metadata."
 license = { file = "LICENSE" }
 readme = "README.md"
