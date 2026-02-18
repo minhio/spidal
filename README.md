@@ -18,7 +18,7 @@ uvx spidal
 
 ## TUI
 
-<img src="docs/spidal.svg" width="1000" alt="spidal TUI" />
+![spidal TUI](./docs/spidal.png)
 
 Launch the interactive interface:
 
@@ -64,6 +64,8 @@ Paste up to 25 Monochrome or Spotify URLs (one per field) and press **Download A
 Press `Esc` while typing in a field to return to hotkey navigation.
 
 ### Spotify tab
+
+![Spotify tab](./docs/spotify.png)
 
 On first use, you will be prompted to enter a Spotify access token:
 
