@@ -24,7 +24,7 @@ def _make_flac(path) -> None:
 
 
 def _mb_result(recording_id="rec-id", release_id="rel-id", date="2023-06-15",
-               artist_id="art-id", genres=None, tags=None):
+               artist_id="art-id"):
     """Build a minimal musicbrainzngs ISRC response."""
     return {
         "isrc": {
@@ -32,8 +32,6 @@ def _mb_result(recording_id="rec-id", release_id="rel-id", date="2023-06-15",
                 {
                     "id": recording_id,
                     "title": "My Song",
-                    "genre-list": genres or [],
-                    "tag-list": tags or [],
                     "release-list": [
                         {
                             "id": release_id,
@@ -49,6 +47,16 @@ def _mb_result(recording_id="rec-id", release_id="rel-id", date="2023-06-15",
                     ],
                 }
             ]
+        }
+    }
+
+
+def _recording_result(genres=None, tags=None):
+    """Build a minimal musicbrainzngs get_recording_by_id response."""
+    return {
+        "recording": {
+            "genre-list": genres or [],
+            "tag-list": tags or [],
         }
     }
 
@@ -101,8 +109,11 @@ class TestTagFlac:
                 recording_id="recording-mbid-123",
                 release_id="release-mbid-456",
                 artist_id="artist-mbid-789",
-                genres=[{"name": "rock", "count": "10"}],
             ),
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(genres=[{"name": "rock", "count": "10"}]),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
@@ -134,12 +145,14 @@ class TestTagFlac:
 
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_recordings_by_isrc",
-            return_value=_mb_result(
-                tags=[
-                    {"name": "pop", "count": "3"},
-                    {"name": "indie", "count": "8"},
-                ],
-            ),
+            return_value=_mb_result(),
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(tags=[
+                {"name": "pop", "count": "3"},
+                {"name": "indie", "count": "8"},
+            ]),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
@@ -183,6 +196,10 @@ class TestTagFlac:
             return_value=_mb_result(),
         )
         mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(),
+        )
+        mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
             side_effect=musicbrainzngs.WebServiceError("timeout"),
         )
@@ -218,8 +235,6 @@ class TestTagFlac:
                 "recording-list": [
                     {
                         "id": "rec-id",
-                        "genre-list": [],
-                        "tag-list": [],
                         "release-list": [
                             {"id": "no-date-release", "artist-credit": []},
                             {"id": "dated-release", "date": "2021-01-01", "artist-credit": []},
@@ -231,6 +246,10 @@ class TestTagFlac:
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_recordings_by_isrc",
             return_value=mb_result,
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
@@ -251,6 +270,10 @@ class TestTagFlac:
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_recordings_by_isrc",
             return_value=_mb_result(),
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
@@ -285,8 +308,6 @@ class TestTagFlac:
                 "recording-list": [
                     {
                         "id": "rec-id",
-                        "genre-list": [],
-                        "tag-list": [],
                         "release-list": [{"id": "rel-id", "date": "2020", "artist-credit": []}],
                     }
                 ]
@@ -295,6 +316,10 @@ class TestTagFlac:
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_recordings_by_isrc",
             return_value=mb_result,
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
@@ -313,8 +338,6 @@ class TestTagFlac:
                 "recording-list": [
                     {
                         "id": "rec-id",
-                        "genre-list": [],
-                        "tag-list": [],
                         "release-list": [
                             {
                                 "id": "rel-id",
@@ -334,6 +357,10 @@ class TestTagFlac:
             return_value=mb_result,
         )
         mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(),
+        )
+        mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",
             return_value=_release_result(),
         )
@@ -347,7 +374,11 @@ class TestTagFlac:
         _make_flac(str(flac_path))
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_recordings_by_isrc",
-            return_value=_mb_result(genres=[{"name": "classic rock", "count": "5"}]),
+            return_value=_mb_result(),
+        )
+        mocker.patch(
+            "spidal.tagging.musicbrainzngs.get_recording_by_id",
+            return_value=_recording_result(genres=[{"name": "classic rock", "count": "5"}]),
         )
         mocker.patch(
             "spidal.tagging.musicbrainzngs.get_release_by_id",

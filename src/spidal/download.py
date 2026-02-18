@@ -11,12 +11,32 @@ import requests
 from spidal.config import Config
 from spidal.hifi import iter_stream_urls
 from spidal.persistence import get_db, save_track
-from spidal.tagging import tag_flac
+from spidal.tagging import tag_flac, tag_m4a, tag_ogg, tag_webm
 
 logger = logging.getLogger(__name__)
 
 MIN_FILE_SIZE = 50 * 1024  # 50 KB
 MAX_RETRIES = 3
+
+
+def _sniff_extension(path: Path) -> str:
+    """Return the correct file extension based on magic bytes."""
+    try:
+        with path.open("rb") as f:
+            header = f.read(12)
+        if header[:4] == b"fLaC":
+            return ".flac"
+        if header[4:8] == b"ftyp":
+            return ".m4a"
+        if header[:4] == b"OggS":
+            return ".ogg"
+        if header[:4] == b"\x1a\x45\xdf\xa3":
+            return ".webm"
+        if header[:3] == b"ID3" or header[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+            return ".mp3"
+    except OSError:
+        pass
+    return path.suffix
 
 
 def _sanitize(name: str) -> str:
@@ -234,6 +254,14 @@ def download_track(
         _persist(track, track_id, title, artist, album, track_number, "failed")
         return "failed", None
 
+    # Rename if the actual format doesn't match the .flac extension
+    actual_ext = _sniff_extension(file_path)
+    if actual_ext != file_path.suffix:
+        new_path = file_path.with_suffix(actual_ext)
+        file_path.rename(new_path)
+        file_path = new_path
+        logger.info("Renamed to %s (actual format: %s)", file_path.name, actual_ext)
+
     logger.info("Downloaded: %s", file_path)
     _persist(
         track,
@@ -246,7 +274,20 @@ def download_track(
         str(file_path),
     )
 
-    tag_flac(str(file_path), track, artist, album)
+    if config.disable_tagging and config.disable_tagging.lower() not in ("false", "0", ""):
+        logger.info("Tagging disabled, skipping: %s", file_path.name)
+    else:
+        _TAGGERS = {
+            ".flac": tag_flac,
+            ".m4a": tag_m4a,
+            ".ogg": tag_ogg,
+            ".webm": tag_webm,
+        }
+        tagger = _TAGGERS.get(file_path.suffix)
+        if tagger:
+            tagger(str(file_path), track, artist, album)
+        else:
+            logger.warning("No tagger for format %s: %s", file_path.suffix, file_path.name)
 
     return "downloaded", str(file_path)
 

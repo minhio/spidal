@@ -183,6 +183,7 @@ Options can be set via `spidal config set`, environment variables, or CLI flags.
 | `download-dir`    | `--download-dir`  | `SPIDAL_DOWNLOAD_DIR`    | `~/Music/spidal`         | Download directory                   |
 | `download-delay`  | —                 | `SPIDAL_DOWNLOAD_DELAY`  | `0`                      | Seconds to wait between track downloads |
 | `audio-quality`   | —                 | `SPIDAL_AUDIO_QUALITY`   | `HI_RES_LOSSLESS`        | Audio quality (see below)            |
+| `disable-tagging` | —                 | `SPIDAL_DISABLE_TAGGING` | `false`                  | Skip MusicBrainz tagging after download |
 
 `--hifi-api` and `--hifi-api-file` are mutually exclusive.
 
@@ -195,9 +196,17 @@ Options can be set via `spidal config set`, environment variables, or CLI flags.
 | `HIGH`            | 320kbps AAC                  |
 | `LOW`             | 96kbps AAC                   |
 
-## FLAC tagging
+## Tagging
 
-Downloaded tracks are automatically tagged using the [MusicBrainz](https://musicbrainz.org) API (via ISRC lookup). No API key is required.
+Downloaded tracks are automatically tagged using the [MusicBrainz](https://musicbrainz.org) API (via ISRC lookup). No API key is required. Tagging can be disabled with `spidal config set disable-tagging true`.
+
+The actual file format is detected from magic bytes after download and the file is renamed accordingly (e.g. DASH streams produce `.m4a`, not `.flac`). Tags are written using the appropriate format:
+
+| Format | Container | Tag standard |
+|--------|-----------|--------------|
+| `.flac` | FLAC | VorbisComment |
+| `.m4a` | MPEG-4 | iTunes (MP4) |
+| `.ogg` | Ogg | VorbisComment (Vorbis or Opus) |
 
 Tags written per track:
 
@@ -209,7 +218,7 @@ Tags written per track:
 | `TRACKNUMBER`          | Monochrome API                |
 | `ISRC`                 | Monochrome API                |
 | `DATE`                 | MusicBrainz release           |
-| `GENRE`                | MusicBrainz genre/tag list    |
+| `GENRE`                | MusicBrainz tag list          |
 | `ALBUMARTIST`          | MusicBrainz artist credit     |
 | `DISCNUMBER`           | MusicBrainz release medium    |
 | `DISCTOTAL`            | MusicBrainz release medium    |
@@ -218,7 +227,7 @@ Tags written per track:
 | `MUSICBRAINZ_ALBUMID`  | MusicBrainz release MBID      |
 | `MUSICBRAINZ_ARTISTID` | MusicBrainz artist MBID       |
 
-Tag names follow [MusicBrainz Picard](https://picard-docs.musicbrainz.org/en/appendices/tag_mapping.html) Vorbis comment conventions and are compatible with Plex, Roon, and other media servers.
+Tag names follow [MusicBrainz Picard](https://picard-docs.musicbrainz.org/en/appendices/tag_mapping.html) conventions and are compatible with Plex, Roon, and other media servers.
 
 Tagging is best-effort — failures are logged but never interrupt the download.
 

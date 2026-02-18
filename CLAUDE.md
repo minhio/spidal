@@ -50,23 +50,39 @@ The callback calls `setup_logging()` then `Config.load()` with CLI args as overr
 
 `src/spidal/download.py` handles the full lifecycle of a single track:
 
-1. `download_track()` — resolves dest path, checks for existing file (→ `"skipped"`), calls `iter_stream_urls()` to get candidate URLs, tries each with `_download_direct()` (single-file FLAC) or `_download_dash()` (DASH segments), validates size (>50KB), then calls `tag_flac()` and persists to db.
+1. `download_track()` — resolves dest path, checks for existing file (→ `"skipped"`), calls `iter_stream_urls()` to get candidate URLs, tries each with `_download_direct()` (single-file) or `_download_dash()` (DASH segments), validates size (>50KB), sniffs actual file format, renames if needed, then dispatches to the appropriate tagger and persists to db.
 2. `download_tracks()` — iterates a list, calls `download_track()` for each, collects counts, fires `on_progress` callback, sleeps `download_delay` seconds between tracks (only when status is `"downloaded"`, not `"skipped"`).
 3. Return values: `"downloaded"` (fresh download), `"skipped"` (file already exists), `"failed"` (error or size check). `download_tracks` maps `"skipped"` → `"downloaded"` for its counts.
 
-### FLAC tagging
+### Audio tagging
 
-`src/spidal/tagging.py` enriches downloaded FLAC files with Vorbis Comment tags using the MusicBrainz API:
+`src/spidal/tagging.py` tags downloaded audio files using the MusicBrainz API. Tagging is skipped if `config.disable_tagging` is truthy.
 
-1. **Base tags** (from hifi data): `TITLE`, `ARTIST`, `ALBUM`, `TRACKNUMBER`, `ISRC`
-2. **ISRC lookup** — `musicbrainzngs.get_recordings_by_isrc()` with `includes=["releases", "artists", "genres", "tags"]`: yields `MUSICBRAINZ_TRACKID`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`, `DATE`, `ALBUMARTIST`, `GENRE`
-3. **Release detail lookup** — `musicbrainzngs.get_release_by_id()` with `includes=["recordings", "media"]`: yields `DISCNUMBER`, `DISCTOTAL`, `TRACKTOTAL`
+**Format detection** — after download, `_sniff_extension()` reads magic bytes and renames the file if needed:
 
-Genre resolution: `genre-list` (curated, higher quality) preferred over `tag-list` (user tags); highest vote-count wins; title-cased on write.
+| Magic bytes | Extension | Tagger |
+|---|---|---|
+| `fLaC` at offset 0 | `.flac` | `tag_flac` — VorbisComment via `mutagen.flac.FLAC` |
+| `ftyp` at offset 4 | `.m4a` | `tag_m4a` — iTunes tags via `mutagen.mp4.MP4` |
+| `OggS` at offset 0 | `.ogg` | `tag_ogg` — VorbisComment via `mutagen.File()` (Vorbis or Opus) |
+| `\x1a\x45\xdf\xa3` at offset 0 | `.webm` | `tag_webm` — not supported, logs warning |
+| `ID3`/`\xff\xfb` at offset 0 | `.mp3` | no tagger, logs warning |
 
-Rate limiting: `musicbrainzngs.set_rate_limit(1.0)` enforces ~1 req/sec. Two MB calls per track add ~2s of natural delay, so `download-delay` defaults to `0`.
+**MusicBrainz API calls** (3 per track, rate-limited to ~1 req/sec):
 
-`tag_flac()` is always best-effort — all errors are logged and swallowed, never raised.
+1. `get_recordings_by_isrc(isrc, includes=["releases", "artists"])` — valid includes for ISRC are only `releases`, `artists`, `isrcs`
+2. `get_recording_by_id(mbid, includes=["tags"])` — fetches tag/genre data; `genres` is **not** a valid include here, only `tags`
+3. `get_release_by_id(mbid, includes=["recordings", "media"])` — yields `DISCNUMBER`, `DISCTOTAL`, `TRACKTOTAL`
+
+**Shared logic** — `_build_tags()` builds a neutral `dict[str, str]` using VorbisComment key names. `tag_flac` and `tag_ogg` both call `_write_vorbiscomment()` with this dict. `tag_m4a` maps it to iTunes keys (`©nam`, `©ART`, `trkn`, `disk`, freeform `----:com.apple.iTunes:*`).
+
+Genre resolution: `genre-list` preferred over `tag-list`; highest vote-count wins; title-cased on write.
+
+Rate limiting: `musicbrainzngs.set_rate_limit(1.0)` + 3 MB calls ≈ ~3s natural delay per track, so `download-delay` defaults to `0`.
+
+All tagging functions are best-effort — errors are logged and swallowed, never raised.
+
+`musicbrainzngs` logger is set to `WARNING` in `setup_logging()` to suppress verbose XML parsing noise.
 
 ### TUI tab architecture
 
@@ -123,7 +139,7 @@ def _make_flac(path) -> None:
         )
 ```
 
-Tests that call `download_track` and produce a real file path must also `mocker.patch("spidal.download.tag_flac")` to avoid mutagen failing on fake binary content.
+Tests that call `download_track` and produce a real file path must mock the tagger to avoid mutagen failing on fake binary content. Mock at the source: `mocker.patch("spidal.download.tag_flac")`, `mocker.patch("spidal.download.tag_m4a")`, etc. — whichever format the test produces.
 
 ## Conventions
 

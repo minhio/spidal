@@ -30,6 +30,7 @@ DEFAULTS: dict[str, str | None] = {
     "download-dir": str(DOWNLOAD_DIR),
     "audio-quality": "HI_RES_LOSSLESS",
     "download-delay": "0",
+    "disable-tagging": "false",
 }
 
 ENV_PREFIX = "SPIDAL_"
@@ -46,6 +47,7 @@ def setup_logging() -> None:
             ),
         ],
     )
+    logging.getLogger("musicbrainzngs").setLevel(logging.WARNING)
 
 
 def load_config_file() -> dict[str, str]:
@@ -77,6 +79,7 @@ class Config:
     download_dir: str | None = None
     audio_quality: str | None = None
     download_delay: str | None = None
+    disable_tagging: str | None = None
     _apis_cache: list[str] | None = field(default=None, init=False, repr=False)
 
     @classmethod

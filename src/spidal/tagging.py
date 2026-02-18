@@ -4,7 +4,11 @@ import logging
 from pathlib import Path
 
 import musicbrainzngs
+from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
+from mutagen.mp4 import MP4, MP4FreeForm
+from mutagen.oggopus import OggOpus
+from mutagen.oggvorbis import OggVorbis
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +20,10 @@ def _lookup_isrc(isrc: str) -> dict | None:
     """Look up a recording by ISRC on MusicBrainz.
 
     Returns the first matching recording dict, or None on failure/no match.
-    Includes releases, artists, and genre/tag data.
     """
     try:
         result = musicbrainzngs.get_recordings_by_isrc(
-            isrc, includes=["releases", "artists", "genres", "tags"]
+            isrc, includes=["releases", "artists"]
         )
     except musicbrainzngs.WebServiceError as e:
         logger.warning("MusicBrainz ISRC lookup failed for %s: %s", isrc, e)
@@ -32,6 +35,18 @@ def _lookup_isrc(isrc: str) -> dict | None:
         return None
 
     return recordings[0]
+
+
+def _lookup_recording(recording_mbid: str) -> dict | None:
+    """Fetch tag data for a recording by MBID."""
+    try:
+        result = musicbrainzngs.get_recording_by_id(
+            recording_mbid, includes=["tags"]
+        )
+        return result.get("recording")
+    except musicbrainzngs.WebServiceError as e:
+        logger.warning("MusicBrainz recording lookup failed for %s: %s", recording_mbid, e)
+        return None
 
 
 def _lookup_release(release_id: str, recording_mbid: str) -> tuple[int | None, int | None, int | None]:
@@ -103,25 +118,12 @@ def _artist_credit_name(credits: list) -> str:
     return "".join(parts).strip()
 
 
-def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
-    """Write VorbisComment tags to a FLAC file.
+def _build_tags(track: dict, artist: str, album: str) -> dict[str, str]:
+    """Build a neutral tag dict from hifi data enriched with MusicBrainz lookups.
 
-    Uses hifi track data as the primary source, enriched with two MusicBrainz
-    API calls (ISRC lookup + release detail) for date, genre, disc/track
-    counts, and MusicBrainz IDs.
-    Best-effort: tag errors are logged but never raise.
+    Keys use VorbisComment naming (TITLE, ARTIST, TRACKNUMBER, etc.).
+    Values are always strings.
     """
-    path = Path(file_path)
-    if not path.exists():
-        logger.warning("Cannot tag non-existent file: %s", file_path)
-        return
-
-    try:
-        audio = FLAC(file_path)
-    except Exception as e:
-        logger.warning("Failed to open FLAC for tagging %s: %s", file_path, e)
-        return
-
     title = track.get("title") or track.get("name") or ""
     track_number = track.get("track_number") or 0
     isrc = track.get("isrc") or ""
@@ -145,7 +147,8 @@ def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
             if recording_mbid:
                 tags["MUSICBRAINZ_TRACKID"] = recording_mbid
 
-            genre = _best_genre(recording)
+            recording_detail = _lookup_recording(recording_mbid) if recording_mbid else None
+            genre = _best_genre(recording_detail or {})
             if genre:
                 tags["GENRE"] = genre
 
@@ -182,8 +185,113 @@ def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
                     if track_total is not None:
                         tags["TRACKTOTAL"] = str(track_total)
 
+    return tags
+
+
+# iTunes freeform tag keys for MusicBrainz IDs
+_MP4_FREEFORM = {
+    "ISRC": "----:com.apple.iTunes:ISRC",
+    "MUSICBRAINZ_TRACKID": "----:com.apple.iTunes:MusicBrainz Track Id",
+    "MUSICBRAINZ_ALBUMID": "----:com.apple.iTunes:MusicBrainz Album Id",
+    "MUSICBRAINZ_ARTISTID": "----:com.apple.iTunes:MusicBrainz Artist Id",
+}
+
+# Simple string tag mapping from VorbisComment keys to iTunes MP4 keys
+_MP4_SIMPLE = {
+    "TITLE": "\xa9nam",
+    "ARTIST": "\xa9ART",
+    "ALBUM": "\xa9alb",
+    "ALBUMARTIST": "aART",
+    "DATE": "\xa9day",
+    "GENRE": "\xa9gen",
+}
+
+
+def _write_vorbiscomment(audio: object, tags: dict[str, str], file_path: str) -> None:
+    """Write a neutral tag dict to any mutagen VorbisComment-backed file."""
     for key, value in tags.items():
-        audio[key] = value
+        audio[key] = value  # type: ignore[index]
+    try:
+        audio.save()  # type: ignore[attr-defined]
+        logger.info("Tagged: %s (%d tags)", file_path, len(tags))
+    except Exception as e:
+        logger.warning("Failed to save tags for %s: %s", file_path, e)
+
+
+def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
+    """Write VorbisComment tags to a FLAC file. Best-effort."""
+    path = Path(file_path)
+    if not path.exists():
+        logger.warning("Cannot tag non-existent file: %s", file_path)
+        return
+    try:
+        audio = FLAC(file_path)
+    except Exception as e:
+        logger.warning("Failed to open FLAC for tagging %s: %s", file_path, e)
+        return
+    _write_vorbiscomment(audio, _build_tags(track, artist, album), file_path)
+
+
+def tag_ogg(file_path: str, track: dict, artist: str, album: str) -> None:
+    """Write VorbisComment tags to an OGG file (Vorbis or Opus). Best-effort."""
+    path = Path(file_path)
+    if not path.exists():
+        logger.warning("Cannot tag non-existent file: %s", file_path)
+        return
+    try:
+        audio = MutagenFile(file_path)
+    except Exception as e:
+        logger.warning("Failed to open OGG for tagging %s: %s", file_path, e)
+        return
+    if not isinstance(audio, (OggVorbis, OggOpus)):
+        logger.warning("Unexpected OGG type %s for %s", type(audio).__name__, file_path)
+        return
+    _write_vorbiscomment(audio, _build_tags(track, artist, album), file_path)
+
+
+def tag_webm(file_path: str, track: dict, artist: str, album: str) -> None:
+    """Tag a WebM file. mutagen has no native WebM support — logs a warning."""
+    logger.warning("WebM tagging not supported, file will be untagged: %s", file_path)
+
+
+def tag_m4a(file_path: str, track: dict, artist: str, album: str) -> None:
+    """Write iTunes-style tags to an M4A file.
+
+    Best-effort: tag errors are logged but never raise.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        logger.warning("Cannot tag non-existent file: %s", file_path)
+        return
+
+    try:
+        audio = MP4(file_path)
+    except Exception as e:
+        logger.warning("Failed to open M4A for tagging %s: %s", file_path, e)
+        return
+
+    tags = _build_tags(track, artist, album)
+
+    for vorbis_key, mp4_key in _MP4_SIMPLE.items():
+        if vorbis_key in tags:
+            audio[mp4_key] = [tags[vorbis_key]]
+
+    # Track number: trkn expects [(track_num, total_tracks)]
+    if "TRACKNUMBER" in tags:
+        track_num = int(tags["TRACKNUMBER"])
+        track_total = int(tags["TRACKTOTAL"]) if "TRACKTOTAL" in tags else 0
+        audio["trkn"] = [(track_num, track_total)]
+
+    # Disc number: disk expects [(disc_num, disc_total)]
+    if "DISCNUMBER" in tags:
+        disc_num = int(tags["DISCNUMBER"])
+        disc_total = int(tags["DISCTOTAL"]) if "DISCTOTAL" in tags else 0
+        audio["disk"] = [(disc_num, disc_total)]
+
+    # Freeform tags for ISRC and MusicBrainz IDs
+    for vorbis_key, mp4_key in _MP4_FREEFORM.items():
+        if vorbis_key in tags:
+            audio[mp4_key] = [MP4FreeForm(tags[vorbis_key].encode())]
 
     try:
         audio.save()
