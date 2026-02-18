@@ -497,9 +497,9 @@ class SearchWidget(Vertical):
         if total > 0:
             pct = current / total
             filled = int(pct * 30)
-            text = f" [{'█' * filled}{'░' * (30 - filled)}] {current}/{total}"
+            text = f" [red][{'█' * filled}{'░' * (30 - filled)}] {current}/{total}[/red]"
         else:
-            text = " Downloading..."
+            text = "[red] Downloading...[/red]"
         self._update_status(text)
 
     def _hide_progress(self) -> None:
