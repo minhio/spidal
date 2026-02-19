@@ -80,7 +80,6 @@ class TestConfigList:
         result = runner.invoke(app, ["config", "list"])
         assert result.exit_code == 0
         assert "download-dir" in result.output
-        assert "audio-quality" in result.output
         assert "spotify-token" in result.output
 
     def test_shows_config_file_path(self):

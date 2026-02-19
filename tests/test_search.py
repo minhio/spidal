@@ -42,7 +42,7 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_loads_first_page(self, mocker):
         mock_search = mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=(
                 [
                     {
@@ -57,7 +57,7 @@ class TestSearchAppMount:
             ),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
 
@@ -68,16 +68,16 @@ class TestSearchAppMount:
             assert app.tracks[0]["title"] == "Song"
             table = app.query_one("#tracks-table")
             assert table.row_count == 1
-            mock_search.assert_called_once_with(app.config, "test query")
+            mock_search.assert_called_once_with(app.config.get_apis(), "test query")
 
     @pytest.mark.asyncio
     async def test_loads_albums(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=([], 0),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=(
                 [
                     {
@@ -103,7 +103,7 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_enter_shows_action_screen(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=(
                 [
                     {
@@ -118,7 +118,7 @@ class TestSearchAppMount:
             ),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
 
@@ -133,7 +133,7 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_action_screen_open_url(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=(
                 [
                     {
@@ -148,7 +148,7 @@ class TestSearchAppMount:
             ),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
         mock_open = mocker.patch("spidal.commands.search.webbrowser.open")
@@ -168,7 +168,7 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_action_screen_download(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=(
                 [
                     {
@@ -183,7 +183,7 @@ class TestSearchAppMount:
             ),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
         mock_dl = mocker.patch(
@@ -205,7 +205,7 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_action_screen_escape(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=(
                 [
                     {
@@ -220,7 +220,7 @@ class TestSearchAppMount:
             ),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
 
@@ -238,11 +238,11 @@ class TestSearchAppMount:
     @pytest.mark.asyncio
     async def test_empty_results(self, mocker):
         mocker.patch(
-            "spidal.commands.search._search_page",
+            "spidal.commands.search.search_tracks",
             return_value=([], 0),
         )
         mocker.patch(
-            "spidal.commands.search._search_albums_page",
+            "spidal.commands.search.search_albums",
             return_value=([], 0),
         )
 

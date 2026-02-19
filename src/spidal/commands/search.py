@@ -26,7 +26,7 @@ import logging
 
 from spidal.config import Config
 from spidal.download import _sanitize, download_track, download_tracks
-from spidal.hifi import _search_page, _search_albums_page, get_album_tracks
+from spidal.hifi import search_tracks, search_albums, get_album_tracks
 from spidal.persistence import get_db, get_track
 
 logger = logging.getLogger(__name__)
@@ -324,7 +324,7 @@ class SearchWidget(Vertical):
     @work(thread=True)
     def _load_results(self) -> None:
         # Fetch tracks
-        tracks, _total = _search_page(self.config, self.query)
+        tracks, _total = search_tracks(self.config.get_apis(), self.query)
         tracks_table = self.query_one("#tracks-table", DataTable)
         db = get_db()
         for track in tracks:
@@ -344,7 +344,7 @@ class SearchWidget(Vertical):
         db.close()
 
         # Fetch albums
-        albums, _total = _search_albums_page(self.config, self.query)
+        albums, _total = search_albums(self.config.get_apis(), self.query)
         albums_table = self.query_one("#albums-table", DataTable)
         for album in albums:
             idx = len(self.albums)
@@ -529,7 +529,7 @@ class SearchWidget(Vertical):
         album_id = album["id"]
         self.app.call_from_thread(self._update_status, " Fetching album tracks...")
         try:
-            _album_title, tracks = get_album_tracks(self.config, album_id)
+            _album_title, tracks = get_album_tracks(self.config.get_apis(), album_id)
         except (ConnectionError, ValueError) as e:
             self.app.call_from_thread(self.app.notify, f"Failed: {e}", severity="error")
             self.app.call_from_thread(self._hide_progress)
@@ -634,7 +634,7 @@ class SearchWidget(Vertical):
                 f" Album {i}/{len(albums)}: fetching tracks...",
             )
             try:
-                _title, tracks = get_album_tracks(self.config, album["id"])
+                _title, tracks = get_album_tracks(self.config.get_apis(), album["id"])
             except (ConnectionError, ValueError) as e:
                 logger.warning("Failed to fetch album %s: %s", album["id"], e)
                 total_failed += 1

@@ -20,15 +20,12 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DOWNLOAD_DIR = Path.home() / "Music" / "spidal"
 
-AUDIO_QUALITY_VALUES = ("HI_RES_LOSSLESS", "LOSSLESS", "HIGH", "LOW")
-
 DEFAULTS: dict[str, str | None] = {
     "spotify-api-url": "https://api.spotify.com/v1",
     "spotify-token": None,
     "hifi-api": None,
     "hifi-api-file": "https://raw.githubusercontent.com/monochrome-music/monochrome/main/public/instances.json",
     "download-dir": str(DOWNLOAD_DIR),
-    "audio-quality": "HI_RES_LOSSLESS",
     "download-delay": "0",
     "disable-tagging": "false",
 }
@@ -95,7 +92,6 @@ class Config:
     hifi_api: str | None = None
     hifi_api_file: str | None = None
     download_dir: str | None = None
-    audio_quality: str | None = None
     download_delay: str | None = None
     disable_tagging: str | None = None
     _apis_cache: list[str] | None = field(default=None, init=False, repr=False)
@@ -135,11 +131,6 @@ class Config:
         config = cls(**values)
         if config.hifi_api and config.hifi_api_file:
             raise ValueError("Cannot set both hifi-api and hifi-api-file")
-        if config.audio_quality not in AUDIO_QUALITY_VALUES:
-            raise ValueError(
-                f"Invalid audio-quality '{config.audio_quality}'. "
-                f"Must be one of: {', '.join(AUDIO_QUALITY_VALUES)}"
-            )
 
         logger.info("Config loaded: %s", config)
         return config

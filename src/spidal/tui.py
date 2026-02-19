@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 
 def _match_and_save_nomatch(config: Config, spotify_tracks: list[dict]) -> list[dict]:
     """Match Spotify tracks by ISRC and save unmatched records to the nomatch DB."""
-    from spidal.hifi import match_spotify_tracks
+    from spidal.matcher import match_spotify_tracks
 
-    matched, unmatched = match_spotify_tracks(config, spotify_tracks)
+    matched, unmatched = match_spotify_tracks(config.get_apis(), spotify_tracks)
     if unmatched:
         db = get_db()
         for st in unmatched:
@@ -594,7 +594,7 @@ class LibraryWidget(Vertical):
         isrc = record.get("isrc") or ""
         logger.info("Reprocessing nomatch: %s - %s (ISRC=%s)", artist, title, isrc)
         self._set_status(f" Matching: {artist} - {title}...")
-        track = match_track(self.config, f"{artist} {title}", isrc)
+        track = match_track(self.config.get_apis(), f"{artist} {title}", isrc)
         if not track:
             self._set_status(f" Still no match: {artist} - {title}")
             return
@@ -864,7 +864,7 @@ class GetWidget(Vertical):
         from spidal.download import download_track
         from spidal.hifi import get_track_info
 
-        info = get_track_info(self.config, track_id)
+        info = get_track_info(self.config.get_apis(), track_id)
         if not info:
             return 0, 1
         status, _ = download_track(
@@ -879,7 +879,7 @@ class GetWidget(Vertical):
         from spidal.download import download_tracks
         from spidal.hifi import get_album_tracks
 
-        _, tracks = get_album_tracks(self.config, album_id)
+        _, tracks = get_album_tracks(self.config.get_apis(), album_id)
         counts = download_tracks(self.config, tracks)
         return counts["downloaded"], counts["failed"]
 
@@ -899,7 +899,7 @@ class GetWidget(Vertical):
             isrc = data.get("external_ids", {}).get("isrc")
             if not isrc:
                 return 0, 1
-            track = match_track(self.config, f"{artists} {title}", isrc)
+            track = match_track(self.config.get_apis(), f"{artists} {title}", isrc)
             if not track:
                 db = get_db()
                 save_nomatch(db, data)

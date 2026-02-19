@@ -44,7 +44,7 @@ def _download_monochrome_track(config: Config, track_id: int) -> None:
     from spidal.download import download_track
     from spidal.hifi import get_track_info
 
-    info = get_track_info(config, track_id)
+    info = get_track_info(config.get_apis(), track_id)
     if not info:
         typer.echo(f"Track not found: {track_id}")
         raise typer.Exit(code=1)
@@ -67,7 +67,7 @@ def _download_monochrome_album(config: Config, album_id: int) -> None:
     from spidal.hifi import get_album_tracks
 
     typer.echo(f"Fetching album {album_id}...")
-    album_title, tracks = get_album_tracks(config, album_id)
+    album_title, tracks = get_album_tracks(config.get_apis(), album_id)
     if not tracks:
         typer.echo("No tracks found in album.")
         raise typer.Exit(code=1)
@@ -100,7 +100,7 @@ def _download_spotify_track(config: Config, url: str) -> None:
         typer.echo("No ISRC found for this track.")
         raise typer.Exit(code=1)
 
-    matched = match_track(config, f"{artists} {title}", isrc)
+    matched = match_track(config.get_apis(), f"{artists} {title}", isrc)
     if not matched:
         typer.echo("No matching track found on hifi API.")
         raise typer.Exit(code=1)
@@ -119,10 +119,10 @@ def _download_spotify_track(config: Config, url: str) -> None:
 
 def _match_spotify_tracks(config: Config, spotify_tracks: list[dict]) -> list[dict]:
     """Match Spotify tracks by ISRC, echoing results and saving unmatched to DB."""
-    from spidal.hifi import match_spotify_tracks as _do_match
+    from spidal.matcher import match_spotify_tracks as _do_match
     from spidal.persistence import get_db, save_nomatch
 
-    matched, unmatched = _do_match(config, spotify_tracks)
+    matched, unmatched = _do_match(config.get_apis(), spotify_tracks)
     for st in unmatched:
         artists = ", ".join(a["name"] for a in st.get("artists", []))
         title = st.get("name", "Unknown")

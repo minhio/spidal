@@ -1,31 +1,22 @@
-import base64
-
 import pytest
 
-from spidal.config import Config
 from spidal.hifi import (
     _parse_album,
     _parse_dash_manifest,
     get_album_tracks,
-    get_stream_url,
     get_track_info,
     iter_stream_urls,
     match_track,
     search_albums,
-    search_track,
+    search_tracks,
+    search_tracks,
 )
 
-
-def _config(apis):
-    config = Config()
-    config._apis_cache = apis
-    config.audio_quality = "HI_RES_LOSSLESS"
-    return config
 
 
 class TestSearchTrack:
     def test_success(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -47,7 +38,7 @@ class TestSearchTrack:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = search_track(config, "Queen Bohemian Rhapsody")
+        result, _ = search_tracks(apis, "Queen Bohemian Rhapsody")
 
         assert len(result) == 1
         assert result[0] == {
@@ -61,7 +52,7 @@ class TestSearchTrack:
         }
 
     def test_returns_multiple(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -75,46 +66,46 @@ class TestSearchTrack:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = search_track(config, "query")
+        result, _ = search_tracks(apis, "query")
         assert len(result) == 2
 
     def test_no_results(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
         mock_resp.json.return_value = {"version": "1.0", "data": {"items": []}}
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert search_track(config, "nonexistent") == []
+        assert search_tracks(apis, "nonexistent")[0] == []
 
     def test_no_apis_raises(self):
-        config = _config([])
+        apis = []
 
         with pytest.raises(ConnectionError, match="No hifi API endpoints available"):
-            search_track(config, "query")
+            search_tracks(apis, "query")
 
     def test_http_error_returns_empty(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = False
         mock_resp.status_code = 500
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert search_track(config, "query") == []
+        assert search_tracks(apis, "query")[0] == []
 
     def test_unwrapped_response(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
         mock_resp.json.return_value = {
-            "items": [{"id": 99, "name": "Track", "artists": [{"name": "Artist"}]}]
+            "items": [{"id": 99, "title": "Track", "artists": [{"name": "Artist"}]}]
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = search_track(config, "query")
+        result, _ = search_tracks(apis, "query")
         assert result[0]["id"] == 99
         assert result[0]["title"] == "Track"
         assert result[0]["artist"] == "Artist"
@@ -161,7 +152,7 @@ class TestParseAlbum:
     def test_artists_list_fallback(self):
         raw = {
             "id": 1,
-            "name": "Alt Name",
+            "title": "Alt Name",
             "artists": [{"name": "List Artist"}],
         }
         result = _parse_album(raw)
@@ -184,7 +175,7 @@ class TestParseAlbum:
 
 class TestSearchAlbums:
     def test_success(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -206,7 +197,7 @@ class TestSearchAlbums:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = search_albums(config, "Queen Greatest Hits")
+        result, _ = search_albums(apis, "Queen Greatest Hits")
         assert len(result) == 1
         assert result[0] == {
             "id": 500,
@@ -221,7 +212,7 @@ class TestSearchAlbums:
         assert "al=" in call_url
 
     def test_no_results(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -230,17 +221,17 @@ class TestSearchAlbums:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert search_albums(config, "nonexistent") == []
+        assert search_albums(apis, "nonexistent")[0] == []
 
     def test_no_apis_raises(self):
-        config = _config([])
+        apis = []
         with pytest.raises(ConnectionError, match="No hifi API endpoints available"):
-            search_albums(config, "query")
+            search_albums(apis, "query")
 
 
 class TestMatchTrack:
     def test_matches_by_isrc(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -274,14 +265,14 @@ class TestMatchTrack:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = match_track(config, "query", "US0000000002")
+        result = match_track(apis, "query", "US0000000002")
         assert result is not None
         assert result["id"] == 2
         assert result["title"] == "Right"
 
     def test_searches_once(self, mocker):
         """API ignores offset/limit, so match_track only fetches one page."""
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -301,14 +292,14 @@ class TestMatchTrack:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = match_track(config, "query", "NOMATCH")
+        result = match_track(apis, "query", "NOMATCH")
         assert result is None
         from spidal.hifi import requests
 
         assert requests.get.call_count == 1
 
     def test_no_isrc_match(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -328,22 +319,22 @@ class TestMatchTrack:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert match_track(config, "query", "NOMATCH") is None
+        assert match_track(apis, "query", "NOMATCH") is None
 
     def test_empty_results(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
         mock_resp.json.return_value = {"data": {"totalNumberOfItems": 0, "items": []}}
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert match_track(config, "query", "US0000000001") is None
+        assert match_track(apis, "query", "US0000000001") is None
 
 
 class TestGetTrackInfo:
     def test_success(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = True
@@ -360,7 +351,7 @@ class TestGetTrackInfo:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        result = get_track_info(config, 12345)
+        result = get_track_info(apis, 12345)
         assert result == {
             "id": 12345,
             "title": "Song",
@@ -378,25 +369,32 @@ class TestGetTrackInfo:
         )
 
     def test_not_found(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
 
         mock_resp = mocker.Mock()
         mock_resp.ok = False
         mock_resp.status_code = 404
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        assert get_track_info(config, 99999) is None
+        assert get_track_info(apis, 99999) is None
 
 
 class TestParseDashManifest:
     def test_segment_template(self):
         manifest = """<?xml version="1.0"?>
         <MPD>
-          <BaseURL>https://cdn.example.com/audio/</BaseURL>
-          <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1"/>
-          <SegmentTimeline>
-            <S d="1024" r="2"/>
-          </SegmentTimeline>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="320000">
+                <BaseURL>https://cdn.example.com/audio/</BaseURL>
+                <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline>
+                    <S d="1024" r="2"/>
+                  </SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
         </MPD>"""
         segments = _parse_dash_manifest(manifest)
         assert len(segments) == 4  # init + 3 segments (r=2 means repeat 2 → 3 total)
@@ -406,9 +404,16 @@ class TestParseDashManifest:
 
     def test_absolute_urls(self):
         manifest = """<MPD>
-          <SegmentTemplate initialization="https://cdn.example.com/init.mp4"
-                           media="https://cdn.example.com/seg-$Number$.m4s" startNumber="0"/>
-          <SegmentTimeline><S d="512"/></SegmentTimeline>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="128000">
+                <SegmentTemplate initialization="https://cdn.example.com/init.mp4"
+                                 media="https://cdn.example.com/seg-$Number$.m4s" startNumber="0">
+                  <SegmentTimeline><S d="512"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
         </MPD>"""
         segments = _parse_dash_manifest(manifest)
         assert segments[0] == "https://cdn.example.com/init.mp4"
@@ -416,9 +421,17 @@ class TestParseDashManifest:
 
     def test_segment_url_fallback(self):
         manifest = """<MPD>
-          <BaseURL>https://cdn.example.com/</BaseURL>
-          <SegmentURL media="chunk1.m4s"/>
-          <SegmentURL media="chunk2.m4s"/>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <BaseURL>https://cdn.example.com/</BaseURL>
+              <Representation id="audio" bandwidth="128000">
+                <SegmentList>
+                  <SegmentURL media="chunk1.m4s"/>
+                  <SegmentURL media="chunk2.m4s"/>
+                </SegmentList>
+              </Representation>
+            </AdaptationSet>
+          </Period>
         </MPD>"""
         segments = _parse_dash_manifest(manifest)
         assert len(segments) == 2
@@ -427,155 +440,120 @@ class TestParseDashManifest:
     def test_empty_manifest(self):
         assert _parse_dash_manifest("<MPD></MPD>") == []
 
-
-class TestGetStreamUrl:
-    def test_direct_url_field(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            "data": {"streamUrl": "https://cdn.example.com/track.flac"}
-        }
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        assert get_stream_url(config, 123) == "https://cdn.example.com/track.flac"
-
-    def test_original_track_url_preferred(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            "data": {
-                "originalTrackUrl": "https://cdn.example.com/original.flac",
-                "streamUrl": "https://cdn.example.com/stream.flac",
-            }
-        }
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        assert get_stream_url(config, 123) == "https://cdn.example.com/original.flac"
-
-    def test_stream_nested_url(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            "data": {"stream": {"url": "https://cdn.example.com/nested.flac"}}
-        }
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        assert get_stream_url(config, 123) == "https://cdn.example.com/nested.flac"
-
-    def test_json_manifest(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        manifest = '{"urls": ["https://cdn.example.com/from-manifest.flac"]}'
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {"data": {"manifest": manifest}}
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        assert (
-            get_stream_url(config, 123) == "https://cdn.example.com/from-manifest.flac"
-        )
-
-    def test_base64_json_manifest(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        manifest_json = '{"urls": ["https://cdn.example.com/b64.flac"]}'
-        b64 = base64.b64encode(manifest_json.encode()).decode()
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {"data": {"manifest": b64}}
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        assert get_stream_url(config, 123) == "https://cdn.example.com/b64.flac"
-
-    def test_dash_manifest(self, mocker):
-        config = _config(["https://api1.example.com"])
-
+    def test_highest_bandwidth_selected(self):
         manifest = """<MPD>
-          <BaseURL>https://cdn.example.com/</BaseURL>
-          <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1"/>
-          <SegmentTimeline><S d="1024"/></SegmentTimeline>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="low" bandwidth="128000">
+                <SegmentTemplate initialization="low-init.mp4" media="low-seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+              <Representation id="high" bandwidth="320000">
+                <SegmentTemplate initialization="high-init.mp4" media="high-seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
         </MPD>"""
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {"data": {"manifest": manifest}}
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
+        segments = _parse_dash_manifest(manifest)
+        assert segments[0] == "high-init.mp4"
+        assert segments[1] == "high-seg-1.m4s"
 
-        result = get_stream_url(config, 123)
-        assert isinstance(result, list)
-        assert len(result) == 2
+    def test_representation_id_template(self):
+        manifest = """<MPD>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio-aac" bandwidth="128000">
+                <SegmentTemplate initialization="$RepresentationID$-init.mp4"
+                                 media="$RepresentationID$-seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>"""
+        segments = _parse_dash_manifest(manifest)
+        assert segments[0] == "audio-aac-init.mp4"
+        assert segments[1] == "audio-aac-seg-1.m4s"
 
-    def test_returns_any_url_without_filtering(self, mocker):
-        config = _config(["https://api1.example.com"])
+    def test_time_template(self):
+        manifest = """<MPD>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="128000">
+                <SegmentTemplate media="seg-$Time$.m4s">
+                  <SegmentTimeline>
+                    <S t="0" d="1000"/>
+                    <S t="1000" d="1000"/>
+                  </SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>"""
+        segments = _parse_dash_manifest(manifest)
+        assert segments == ["seg-0.m4s", "seg-1000.m4s"]
 
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            "data": {"streamUrl": "https://example.com/track/123"}
-        }
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
+    def test_zero_padded_number(self):
+        manifest = """<MPD>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="128000">
+                <SegmentTemplate initialization="init.mp4" media="seg-$Number%05d$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024" r="1"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>"""
+        segments = _parse_dash_manifest(manifest)
+        assert segments[1] == "seg-00001.m4s"
+        assert segments[2] == "seg-00002.m4s"
 
-        assert get_stream_url(config, 123) == "https://example.com/track/123"
+    def test_namespace_stripped(self):
+        manifest = """<?xml version="1.0"?>
+        <MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="128000">
+                <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>"""
+        segments = _parse_dash_manifest(manifest)
+        assert len(segments) == 2
+        assert segments[0] == "init.mp4"
 
-    def test_uses_configured_quality(self, mocker):
-        config = _config(["https://api1.example.com"])
-        config.audio_quality = "LOSSLESS"
 
-        mock_resp = mocker.Mock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            "data": {"streamUrl": "https://cdn.example.com/track.flac"}
-        }
-        mock_get = mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
+    def test_multi_level_base_url(self):
+        """Deepest BaseURL wins — Representation-level takes priority over MPD-level."""
+        manifest = """<MPD>
+          <BaseURL>https://mpd.example.com/</BaseURL>
+          <Period>
+            <AdaptationSet mimeType="audio/mp4">
+              <Representation id="audio" bandwidth="128000">
+                <BaseURL>https://cdn.example.com/audio/</BaseURL>
+                <SegmentTemplate initialization="init.mp4" media="seg-$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S d="1024"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>"""
+        segments = _parse_dash_manifest(manifest)
+        assert segments[0] == "https://cdn.example.com/audio/init.mp4"
+        assert segments[1] == "https://cdn.example.com/audio/seg-1.m4s"
 
-        get_stream_url(config, 123)
-
-        call_url = mock_get.call_args[0][0]
-        assert "quality=LOSSLESS" in call_url
-
-    def test_request_failure_raises(self, mocker):
-        config = _config(["https://api1.example.com"])
-
-        mock_resp = mocker.Mock()
-        mock_resp.ok = False
-        mock_resp.status_code = 500
-        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-
-        with pytest.raises(ValueError, match="Failed to fetch stream data"):
-            get_stream_url(config, 123)
-
-    def test_tries_next_endpoint_on_failure(self, mocker):
-        config = _config(["https://api1.example.com", "https://api2.example.com"])
-
-        fail_resp = mocker.Mock()
-        fail_resp.ok = False
-        fail_resp.status_code = 403
-
-        ok_resp = mocker.Mock()
-        ok_resp.ok = True
-        ok_resp.json.return_value = {
-            "data": {"streamUrl": "https://cdn.example.com/track.flac"}
-        }
-
-        mocker.patch("spidal.hifi.requests.get", side_effect=[fail_resp, ok_resp])
-
-        assert get_stream_url(config, 123) == "https://cdn.example.com/track.flac"
-
-    def test_no_apis_raises_connection_error(self):
-        config = _config([])
-
-        with pytest.raises(ConnectionError, match="No hifi API endpoints available"):
-            get_stream_url(config, 123)
 
 
 class TestGetAlbumTracks:
     def test_success(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
         mock_resp = mocker.Mock()
         mock_resp.ok = True
         mock_resp.json.return_value = {
@@ -590,28 +568,28 @@ class TestGetAlbumTracks:
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
-        album_title, tracks = get_album_tracks(config, 42)
+        album_title, tracks = get_album_tracks(apis, 42)
         assert album_title == "My Album"
         assert len(tracks) == 2
         assert tracks[0]["id"] == 1
 
     def test_raises_on_not_found(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
         mock_resp = mocker.Mock()
         mock_resp.ok = False
         mock_resp.status_code = 404
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
 
         with pytest.raises(ValueError, match="Album not found"):
-            get_album_tracks(config, 999)
+            get_album_tracks(apis, 999)
 
     def test_no_apis_raises(self):
-        config = _config([])
+        apis = []
         with pytest.raises(ConnectionError):
-            get_album_tracks(config, 42)
+            get_album_tracks(apis, 42)
 
     def test_unwraps_item_wrapper(self, mocker):
-        config = _config(["https://api1.example.com"])
+        apis = ["https://api1.example.com"]
         mock_resp = mocker.Mock()
         mock_resp.ok = True
         mock_resp.json.return_value = {
@@ -624,41 +602,80 @@ class TestGetAlbumTracks:
             }
         }
         mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
-        _, tracks = get_album_tracks(config, 1)
+        _, tracks = get_album_tracks(apis, 1)
         assert tracks[0]["id"] == 5
+
+    def test_pagination_loop_safeguard(self, mocker):
+        """If the API ignores offset and returns page 1 again, stop paginating."""
+        apis = ["https://api1.example.com"]
+        page = {
+            "data": {
+                "title": "Album",
+                "numberOfTracks": 10,
+                "items": [{"id": 1, "title": "Track 1", "artist": {"name": "A"}, "trackNumber": 1}],
+            }
+        }
+        mock_resp = mocker.Mock()
+        mock_resp.ok = True
+        mock_resp.json.return_value = page
+        mocker.patch("spidal.hifi.requests.get", return_value=mock_resp)
+
+        _, tracks = get_album_tracks(apis, 42)
+        assert len(tracks) == 1
+
+
+_JSON_MANIFEST = {"manifest": "eyJ1cmxzIjogWyJodHRwczovL2Nkbi5leGFtcGxlLmNvbS90cmFjay5mbGFjIl19"}
+# base64 of: {"urls": ["https://cdn.example.com/track.flac"]}
 
 
 class TestIterStreamUrls:
-    def test_yields_url_from_each_endpoint(self, mocker):
-        config = _config(["https://api1.example.com", "https://api2.example.com"])
+    def test_yields_url_per_endpoint_per_quality(self, mocker):
+        apis = ["https://api1.example.com", "https://api2.example.com"]
 
         def mock_get(url, timeout=None):
             resp = mocker.Mock()
             resp.ok = True
-            resp.json.return_value = {"data": {"streamUrl": "https://cdn.example.com/track.flac"}}
+            resp.json.return_value = {"data": _JSON_MANIFEST}
             return resp
 
         mocker.patch("spidal.hifi.requests.get", side_effect=mock_get)
-        urls = list(iter_stream_urls(config, 123))
-        assert len(urls) == 2
+        urls = list(iter_stream_urls(apis, 123))
+        # 2 endpoints × 2 qualities (HI_RES_LOSSLESS, LOSSLESS) = 4 results
+        assert len(urls) == 4
         assert all(u == "https://cdn.example.com/track.flac" for u in urls)
 
+    def test_hi_res_lossless_tried_before_lossless(self, mocker):
+        def mock_get(url, timeout=None):
+            resp = mocker.Mock()
+            resp.ok = True
+            resp.json.return_value = {"data": _JSON_MANIFEST}
+            return resp
+
+        mock = mocker.patch("spidal.hifi.requests.get", side_effect=mock_get)
+        list(iter_stream_urls(["https://api1.example.com"], 123))
+
+        urls_called = [call[0][0] for call in mock.call_args_list]
+        assert "quality=HI_RES_LOSSLESS" in urls_called[0]
+        assert "quality=LOSSLESS" in urls_called[1]
+
     def test_skips_failed_endpoints(self, mocker):
-        config = _config(["https://api1.example.com", "https://api2.example.com"])
+        apis = ["https://api1.example.com", "https://api2.example.com"]
 
-        fail_resp = mocker.Mock()
-        fail_resp.ok = False
-        fail_resp.status_code = 500
+        def make_resp(ok):
+            resp = mocker.Mock()
+            resp.ok = ok
+            resp.status_code = 200 if ok else 500
+            resp.json.return_value = {"data": _JSON_MANIFEST}
+            return resp
 
-        ok_resp = mocker.Mock()
-        ok_resp.ok = True
-        ok_resp.json.return_value = {"data": {"streamUrl": "https://cdn.example.com/track.flac"}}
-
-        mocker.patch("spidal.hifi.requests.get", side_effect=[fail_resp, ok_resp])
-        urls = list(iter_stream_urls(config, 123))
-        assert len(urls) == 1
+        # HI_RES pass: api1 fails, api2 ok; LOSSLESS pass: api1 fails, api2 ok
+        mocker.patch(
+            "spidal.hifi.requests.get",
+            side_effect=[make_resp(False), make_resp(True), make_resp(False), make_resp(True)],
+        )
+        urls = list(iter_stream_urls(apis, 123))
+        assert len(urls) == 2
 
     def test_no_apis_raises(self):
-        config = _config([])
         with pytest.raises(ConnectionError):
-            list(iter_stream_urls(config, 123))
+            list(iter_stream_urls([], 123))

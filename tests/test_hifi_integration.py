@@ -11,14 +11,11 @@ import pytest
 from spidal.config import Config, DEFAULTS
 from spidal.download import download_track, download_tracks
 from spidal.hifi import (
-    _search_albums_page,
-    _search_page,
     get_album_tracks,
-    get_stream_url,
     get_track_info,
     match_track,
     search_albums,
-    search_track,
+    search_tracks,
 )
 
 
@@ -121,23 +118,6 @@ class TestGetTrackInfoIntegration:
         assert info["title"] is not None
         assert info["isrc"] is not None
 
-
-@pytest.mark.integration
-class TestGetStreamUrlIntegration:
-    def test_fetch_stream_url(self, config):
-        # Search for a track to get a valid ID
-        results = search_track(config, "Bohemian Rhapsody Queen")
-        assert len(results) > 0
-        track_id = results[0]["id"]
-
-        url = get_stream_url(config, track_id)
-        assert url is not None
-        if isinstance(url, str):
-            assert url.startswith("http")
-        else:
-            # DASH segments
-            assert len(url) > 0
-            assert url[0].startswith("http")
 
 
 @pytest.mark.integration

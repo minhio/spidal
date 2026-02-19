@@ -259,7 +259,7 @@ def download_track(
         return "skipped", str(file_path)
 
     try:
-        streams = iter_stream_urls(config, track_id)
+        streams = iter_stream_urls(config.get_apis(), track_id)
     except ConnectionError as e:
         logger.error("Failed to get stream URL for track %s: %s", track_id, e)
         _persist(track, track_id, title, artist, album, track_number, "failed")

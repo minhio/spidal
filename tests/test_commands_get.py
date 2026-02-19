@@ -14,7 +14,6 @@ runner = CliRunner()
 def _config(apis=None):
     config = Config()
     config._apis_cache = apis or ["https://api.example.com"]
-    config.audio_quality = "HI_RES_LOSSLESS"
     config.spotify_token = "tok"
     config.spotify_api_url = "https://api.spotify.com/v1"
     return config
@@ -86,7 +85,7 @@ class TestMatchSpotifyTracks:
         config = _config()
         hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": "USTEST123456"}
 
-        mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
+        mocker.patch("spidal.matcher.match_track", return_value=hifi_track)
         mocker.patch("spidal.persistence.get_db")
         mocker.patch("spidal.persistence.save_nomatch")
 
@@ -98,7 +97,7 @@ class TestMatchSpotifyTracks:
         from spidal.commands.get import _match_spotify_tracks
 
         config = _config()
-        mocker.patch("spidal.hifi.match_track")
+        mocker.patch("spidal.matcher.match_track")
         mocker.patch("spidal.persistence.get_db")
         mocker.patch("spidal.persistence.save_nomatch")
 
@@ -111,7 +110,7 @@ class TestMatchSpotifyTracks:
         from spidal.commands.get import _match_spotify_tracks
 
         config = _config()
-        mocker.patch("spidal.hifi.match_track", return_value=None)
+        mocker.patch("spidal.matcher.match_track", return_value=None)
         mock_db = mocker.Mock()
         mocker.patch("spidal.persistence.get_db", return_value=mock_db)
         mock_save = mocker.patch("spidal.persistence.save_nomatch")
@@ -123,7 +122,7 @@ class TestMatchSpotifyTracks:
         from spidal.commands.get import _match_spotify_tracks
 
         config = _config()
-        mocker.patch("spidal.hifi.match_track", return_value=None)
+        mocker.patch("spidal.matcher.match_track", return_value=None)
         mocker.patch("spidal.persistence.get_db", return_value=mocker.Mock())
         mocker.patch("spidal.persistence.save_nomatch")
 
@@ -135,7 +134,7 @@ class TestMatchSpotifyTracks:
 
         config = _config()
         hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Hifi Album", "isrc": "USTEST123456"}
-        mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
+        mocker.patch("spidal.matcher.match_track", return_value=hifi_track)
         mocker.patch("spidal.persistence.get_db")
         mocker.patch("spidal.persistence.save_nomatch")
 

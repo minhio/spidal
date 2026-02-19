@@ -55,24 +55,6 @@ class TestLoad:
         with pytest.raises(ValueError, match="Cannot set both"):
             Config.load(hifi_api="https://api.example.com", hifi_api_file="/path.json")
 
-    def test_audio_quality_default(self, mocker: MockerFixture):
-        mocker.patch.dict(os.environ, {}, clear=True)
-        config = Config.load()
-        assert config.audio_quality == "HI_RES_LOSSLESS"
-
-    def test_audio_quality_env_var(self, mocker: MockerFixture):
-        mocker.patch.dict(os.environ, {"SPIDAL_AUDIO_QUALITY": "LOSSLESS"})
-        config = Config.load()
-        assert config.audio_quality == "LOSSLESS"
-
-    def test_audio_quality_override(self):
-        config = Config.load(audio_quality="HIGH")
-        assert config.audio_quality == "HIGH"
-
-    def test_audio_quality_invalid_raises(self):
-        with pytest.raises(ValueError, match="Invalid audio-quality"):
-            Config.load(audio_quality="INVALID")
-
 
 class TestGetApis:
     def test_hifi_api_returns_single_item(self):
@@ -176,10 +158,3 @@ class TestConfigFile:
         assert saved.get("hifi-api-file") is None
         assert saved["spotify-token"] == "saved_tok"
 
-    def test_audio_quality_from_config_file(self, mocker: MockerFixture, tmp_path):
-        config_dir = tmp_path / "spidal"
-        config_dir.mkdir(parents=True)
-        (config_dir / "config.json").write_text(json.dumps({"audio-quality": "LOW"}))
-        mocker.patch.dict(os.environ, {}, clear=True)
-        config = Config.load()
-        assert config.audio_quality == "LOW"
