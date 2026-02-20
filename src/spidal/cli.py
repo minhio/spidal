@@ -9,7 +9,7 @@ from spidal.commands.config import config_app
 from spidal.commands.get import get
 from spidal.commands.logs import logs
 from spidal.commands.where import where_app
-from spidal.config import Config, setup_logging
+from spidal.core.config import Config, setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,6 @@ def _version_callback(value: bool) -> None:
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    spotify_api_url: Optional[str] = typer.Option(None),
     spotify_token: Optional[str] = typer.Option(None),
     hifi_api: Optional[str] = typer.Option(None),
     hifi_api_file: Optional[str] = typer.Option(None),
@@ -42,7 +41,6 @@ def main(
     """FLAC downloader."""
     setup_logging()
     config = Config.load(
-        spotify_api_url=spotify_api_url,
         spotify_token=spotify_token,
         hifi_api=hifi_api,
         hifi_api_file=hifi_api_file,

@@ -1,29 +1,22 @@
 import logging
-import os
-from dataclasses import fields as dc_fields
 
 import typer
 
-from spidal.config import Config
+from spidal.core.config import CONFIG_FILE, Config
 
 logger = logging.getLogger(__name__)
 
 config_app = typer.Typer()
 
 
-def _detect_source(
-    value: str | None,
-    env_val: str | None,
-    saved_val: str | None,
-    default: str | None,
-) -> str:
-    if saved_val is not None and value == saved_val:
-        return "file"
-    if env_val is not None and value == env_val:
-        return "env"
-    if value == default:
-        return "default"
-    return "cli"
+def _validate_key(key: str) -> str:
+    dashed = key.replace("_", "-")
+    valid_keys = Config.valid_keys()
+    if dashed not in valid_keys:
+        typer.echo(f"Unknown key: {key}", err=True)
+        typer.echo(f"Valid keys: {', '.join(sorted(valid_keys))}", err=True)
+        raise typer.Exit(1)
+    return dashed
 
 
 @config_app.callback(invoke_without_command=True)
@@ -39,65 +32,39 @@ def config_get(
     key: str = typer.Argument(help="Config key to get."),
 ) -> None:
     """Get a configuration value."""
-    from spidal.config import DEFAULTS, ENV_PREFIX, load_config_file
-
-    dashed_key = key.replace("_", "-")
-    valid_keys = {f.name.replace("_", "-") for f in dc_fields(Config) if f.init}
-    if dashed_key not in valid_keys:
-        typer.echo(f"Unknown key: {key}", err=True)
-        typer.echo(f"Valid keys: {', '.join(sorted(valid_keys))}", err=True)
-        raise typer.Exit(1)
+    dashed_key = _validate_key(key)
+    field_name = dashed_key.replace("-", "_")
 
     config: Config = ctx.obj
-    field_name = dashed_key.replace("-", "_")
-    value = getattr(config, field_name)
-    env_val = os.environ.get(f"{ENV_PREFIX}{field_name.upper()}")
-    saved = load_config_file()
-    saved_val = saved.get(dashed_key)
-
-    source = _detect_source(value, env_val, saved_val, DEFAULTS.get(dashed_key))
+    getter = getattr(config, f"get_{field_name}")
+    value = getter()
+    source = config.get_source(dashed_key)
     display = value if value is not None else "(not set)"
     typer.echo(f"{dashed_key}: {display}  [{source}]")
 
 
 @config_app.command("set")
 def config_set(
+    ctx: typer.Context,
     key: str = typer.Argument(help="Config key to set."),
     value: str = typer.Argument(help="Value to set."),
 ) -> None:
     """Set a configuration value."""
-    from spidal.config import load_config_file, save_config_file
+    dashed_key = _validate_key(key)
+    field_name = dashed_key.replace("-", "_")
 
-    dashed_key = key.replace("_", "-")
-    valid_keys = {f.name.replace("_", "-") for f in dc_fields(Config) if f.init}
-    if dashed_key not in valid_keys:
-        typer.echo(f"Unknown key: {key}", err=True)
-        typer.echo(f"Valid keys: {', '.join(sorted(valid_keys))}", err=True)
-        raise typer.Exit(1)
-
-    saved = load_config_file()
-    saved[dashed_key] = value
-    save_config_file(saved)
-    logger.info("Config set: %s = %r", dashed_key, value)
+    config: Config = ctx.obj
+    setter = getattr(config, f"set_{field_name}")
+    setter(value)
     typer.echo(f"{dashed_key}: {value}")
 
 
 @config_app.command("list")
 def config_list(ctx: typer.Context) -> None:
     """Display current configuration values."""
-    from spidal.config import CONFIG_FILE, DEFAULTS, ENV_PREFIX, load_config_file
-
     config: Config = ctx.obj
-    saved = load_config_file()
 
     typer.echo(f"Config file: {CONFIG_FILE}\n")
-    for f in dc_fields(Config):
-        if not f.init:
-            continue
-        value = getattr(config, f.name)
-        env_val = os.environ.get(f"{ENV_PREFIX}{f.name.upper()}")
-        dashed = f.name.replace("_", "-")
-        saved_val = saved.get(dashed)
-        source = _detect_source(value, env_val, saved_val, DEFAULTS.get(dashed))
+    for key, value, source in config.items():
         display = value if value is not None else "(not set)"
-        typer.echo(f"{dashed}: {display}  [{source}]")
+        typer.echo(f"{key}: {display}  [{source}]")

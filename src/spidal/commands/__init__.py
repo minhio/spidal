@@ -4,7 +4,7 @@ import subprocess
 import webbrowser
 from pathlib import Path
 
-from spidal.config import Config
+from spidal.core.config import Config
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ from pathlib import Path
 import typer
 
 from spidal.commands import open_directory
-from spidal.config import Config
+from spidal.core.config import Config
 
 where_app = typer.Typer()
 
@@ -18,7 +18,7 @@ def where_callback(ctx: typer.Context) -> None:
 @where_app.command("config")
 def where_config() -> None:
     """Open the config directory."""
-    from spidal.config import CONFIG_DIR
+    from spidal.core.config import CONFIG_DIR
 
     open_directory(CONFIG_DIR)
 
@@ -26,7 +26,7 @@ def where_config() -> None:
 @where_app.command("db")
 def where_db() -> None:
     """Open the database location."""
-    from spidal.persistence import DB_PATH
+    from spidal.core.persistence import DB_PATH
 
     open_directory(DB_PATH.parent)
 
@@ -41,6 +41,6 @@ def where_dl(ctx: typer.Context) -> None:
 @where_app.command("logs")
 def where_logs() -> None:
     """Open the log directory."""
-    from spidal.config import LOG_DIR
+    from spidal.core.config import LOG_DIR
 
     open_directory(LOG_DIR)

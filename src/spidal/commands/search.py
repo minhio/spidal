@@ -24,10 +24,10 @@ from textual.widgets.option_list import Option
 
 import logging
 
-from spidal.config import Config
-from spidal.download import _sanitize, download_track, download_tracks
-from spidal.hifi import search_tracks, search_albums, get_album_tracks
-from spidal.persistence import get_db, get_track
+from spidal.core.config import Config
+from spidal.core.download import _sanitize, download_track, download_tracks
+from spidal.core.hifi import search_tracks, search_albums, get_album_tracks
+from spidal.core.persistence import get_db, get_track
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,8 @@ class TrackActionScreen(ModalScreen[str | None]):
         self.file_path = file_path
 
     def compose(self) -> ComposeResult:
-        title = self.track.get("title") or "Unknown"
-        artist = self.track.get("artist") or "Unknown"
+        title = self.track.get("hifi_title") or "Unknown"
+        artist = self.track.get("hifi_artist") or "Unknown"
         options = [
             Option("Download", id="download"),
             Option("Open in Monochrome", id="open_url"),
@@ -334,10 +334,10 @@ class SearchWidget(Vertical):
             downloaded = "*" if isrc and get_track(db, isrc) else ""
             row_key = tracks_table.add_row(
                 str(idx + 1),
-                track.get("title") or "",
-                track.get("artist") or "",
-                track.get("album") or "",
-                _format_duration(track.get("duration")),
+                track.get("hifi_title") or "",
+                track.get("hifi_artist") or "",
+                track.get("hifi_album") or "",
+                _format_duration(track.get("hifi_duration")),
                 downloaded,
             )
             self.track_row_keys[idx] = row_key
@@ -446,7 +446,7 @@ class SearchWidget(Vertical):
         if action == "download":
             self._do_download(track)
         elif action == "open_url":
-            webbrowser.open(f"https://monochrome.tf/track/{track['id']}")
+            webbrowser.open(f"https://monochrome.tf/track/{track['hifi_id']}")
         elif action in ("open_file", "open_file_location"):
             file_path = self._get_file_path(track)
             if not file_path:
@@ -513,8 +513,8 @@ class SearchWidget(Vertical):
 
         logger.info("_do_download started, showing initial progress")
         self.app.call_from_thread(self._show_progress, 1, 0)
-        artist = track.get("artist") or "Unknown"
-        album = track.get("album") or "Unknown"
+        artist = track.get("hifi_artist") or "Unknown"
+        album = track.get("hifi_album") or "Unknown"
         status, path = download_track(self.config, track, artist, album, _on_progress)
         if status == "downloaded":
             self.app.call_from_thread(self._show_progress, 1, 1)

@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from spidal.config import Config
+from spidal.core.config import SPOTIFY_API_URL, Config
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,7 @@ def get_track(config: Config, track: str) -> dict:
     token = config.spotify_token
 
     resp = requests.get(
-        f"{config.spotify_api_url}/tracks/{track_id}",
+        f"{SPOTIFY_API_URL}/tracks/{track_id}",
         headers={"Authorization": f"Bearer {token}"},
     )
     if resp.status_code in (400, 404):
@@ -126,7 +126,7 @@ def _paginate(config: Config, url: str) -> list[dict]:
 def get_user_playlists(config: Config) -> list[dict]:
     """Fetch all playlists owned or followed by the current user."""
     logger.info("Fetching user playlists")
-    url = f"{config.spotify_api_url}/me/playlists?limit=50"
+    url = f"{SPOTIFY_API_URL}/me/playlists?limit=50"
     playlists = _paginate(config, url)
     logger.info("Fetched %d playlists", len(playlists))
     return playlists
@@ -136,7 +136,7 @@ def get_album(config: Config, album_id: str) -> dict:
     """Fetch album metadata from Spotify."""
     logger.info("Fetching Spotify album: %s", album_id)
     resp = requests.get(
-        f"{config.spotify_api_url}/albums/{album_id}",
+        f"{SPOTIFY_API_URL}/albums/{album_id}",
         headers=_auth_headers(config),
     )
     _check_response(resp)
@@ -152,7 +152,7 @@ def get_album_tracks(config: Config, album_id: str) -> tuple[dict, list[dict]]:
         Tuple of (album_info, list of track dicts).
     """
     album = get_album(config, album_id)
-    url = f"{config.spotify_api_url}/albums/{album_id}/tracks?limit=50"
+    url = f"{SPOTIFY_API_URL}/albums/{album_id}/tracks?limit=50"
     tracks = _paginate(config, url)
     return album, tracks
 
@@ -170,7 +170,7 @@ def get_tracks(config: Config, track_ids: list[str]) -> list[dict]:
         batch = track_ids[i : i + 50]
         logger.debug("Fetching track batch %d-%d", i + 1, i + len(batch))
         resp = requests.get(
-            f"{config.spotify_api_url}/tracks",
+            f"{SPOTIFY_API_URL}/tracks",
             headers=headers,
             params={"ids": ",".join(batch)},
         )
@@ -187,7 +187,7 @@ def get_playlist_tracks(config: Config, playlist_id: str) -> list[dict]:
         List of track dicts (unwrapped from items[].track).
     """
     logger.info("Fetching tracks for playlist: %s", playlist_id)
-    url = f"{config.spotify_api_url}/playlists/{playlist_id}/tracks?limit=100"
+    url = f"{SPOTIFY_API_URL}/playlists/{playlist_id}/tracks?limit=100"
     items = _paginate(config, url)
     tracks = [item["track"] for item in items if item.get("track")]
     logger.info("Playlist %s: %d track(s)", playlist_id, len(tracks))
@@ -201,7 +201,7 @@ def get_liked_tracks(config: Config) -> list[dict]:
         List of track dicts (unwrapped from items[].track).
     """
     logger.info("Fetching liked tracks")
-    url = f"{config.spotify_api_url}/me/tracks?limit=50"
+    url = f"{SPOTIFY_API_URL}/me/tracks?limit=50"
     items = _paginate(config, url)
     tracks = [item["track"] for item in items if item.get("track")]
     logger.info("Liked tracks: %d", len(tracks))

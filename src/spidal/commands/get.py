@@ -6,7 +6,7 @@ from typing import Any
 import typer
 
 from spidal.commands import ensure_token, refresh_token
-from spidal.config import Config
+from spidal.core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +35,14 @@ def _with_spotify_auth(config: Config, fn: Callable[..., Any], *args: Any) -> An
 
 def _get_spotify_track(config: Config, track_arg: str) -> dict:
     """Fetch Spotify track data, handling token refresh."""
-    from spidal.spotify import get_track
+    from spidal.core.spotify import get_track
     return _with_spotify_auth(config, get_track, track_arg)
 
 
 def _download_monochrome_track(config: Config, track_id: int) -> None:
     """Download a single track by monochrome track ID."""
-    from spidal.download import download_track
-    from spidal.hifi import get_track_info
+    from spidal.core.download import download_track
+    from spidal.core.hifi import get_track_info
 
     info = get_track_info(config.get_apis(), track_id)
     if not info:
@@ -63,8 +63,8 @@ def _download_monochrome_track(config: Config, track_id: int) -> None:
 
 def _download_monochrome_album(config: Config, album_id: int) -> None:
     """Download all tracks from a monochrome album."""
-    from spidal.download import download_tracks
-    from spidal.hifi import get_album_tracks
+    from spidal.core.download import download_tracks
+    from spidal.core.hifi import get_album_tracks
 
     typer.echo(f"Fetching album {album_id}...")
     album_title, tracks = get_album_tracks(config.get_apis(), album_id)
@@ -84,8 +84,9 @@ def _download_monochrome_album(config: Config, album_id: int) -> None:
 
 def _download_spotify_track(config: Config, url: str) -> None:
     """Download a track by Spotify URL."""
-    from spidal.download import download_track
-    from spidal.hifi import match_track
+    from spidal.core.download import download_track
+    from spidal.core.hifi import match_track
+    from spidal.core.persistence import get_db, save_track
 
     data = _get_spotify_track(config, url)
 
@@ -102,12 +103,30 @@ def _download_spotify_track(config: Config, url: str) -> None:
 
     matched = match_track(config.get_apis(), f"{artists} {title}", isrc)
     if not matched:
+        db = get_db()
+        save_track(db, {
+            "isrc": isrc,
+            "spotify_id": data.get("id"),
+            "spotify_title": title,
+            "spotify_artist": artists,
+            "spotify_album": data.get("album", {}).get("name"),
+            "spotify_track_number": data.get("track_number"),
+            "spotify_duration": data.get("duration_ms"),
+        })
+        db.close()
         typer.echo("No matching track found on hifi API.")
         raise typer.Exit(code=1)
 
     typer.echo(
         f"Matched: {matched['title']} by {matched['artist']} (id={matched['id']})"
     )
+
+    matched["spotify_id"] = data.get("id")
+    matched["spotify_title"] = title
+    matched["spotify_artist"] = artists
+    matched["spotify_album"] = data.get("album", {}).get("name")
+    matched["spotify_track_number"] = data.get("track_number")
+    matched["spotify_duration"] = data.get("duration_ms")
 
     status, path = download_track(config, matched, artists, album)
     if status == "downloaded":
@@ -119,14 +138,14 @@ def _download_spotify_track(config: Config, url: str) -> None:
 
 def _match_spotify_tracks(config: Config, spotify_tracks: list[dict]) -> list[dict]:
     """Match Spotify tracks by ISRC, echoing results and saving unmatched to DB."""
-    from spidal.matcher import match_spotify_tracks as _do_match
-    from spidal.persistence import get_db, save_nomatch
+    from spidal.core.matcher import match_tracks_by_isrc as _do_match
+    from spidal.core.persistence import get_db, save_track
 
     matched, unmatched = _do_match(config.get_apis(), spotify_tracks)
     for st in unmatched:
-        artists = ", ".join(a["name"] for a in st.get("artists", []))
-        title = st.get("name", "Unknown")
-        isrc = st.get("external_ids", {}).get("isrc")
+        artists = st.get("spotify_artist", "")
+        title = st.get("spotify_title", "Unknown")
+        isrc = st.get("isrc")
         if not isrc:
             typer.echo(f"  Skipping (no ISRC): {artists} - {title}")
         else:
@@ -134,15 +153,15 @@ def _match_spotify_tracks(config: Config, spotify_tracks: list[dict]) -> list[di
     if unmatched:
         db = get_db()
         for st in unmatched:
-            save_nomatch(db, st)
+            save_track(db, st)
         db.close()
     return matched
 
 
 def _download_spotify_album(config: Config, album_id: str) -> None:
     """Download all tracks from a Spotify album."""
-    from spidal.download import download_tracks
-    from spidal.spotify import get_album_tracks, get_tracks
+    from spidal.core.download import download_tracks
+    from spidal.core.spotify import get_album_tracks, get_tracks
 
     album_info, tracks = _with_spotify_auth(config, get_album_tracks, album_id)
 
@@ -177,8 +196,8 @@ def _download_spotify_album(config: Config, album_id: str) -> None:
 
 def _download_spotify_playlist(config: Config, playlist_id: str) -> None:
     """Download all tracks from a Spotify playlist."""
-    from spidal.download import download_tracks
-    from spidal.spotify import get_playlist_tracks
+    from spidal.core.download import download_tracks
+    from spidal.core.spotify import get_playlist_tracks
 
     tracks = _with_spotify_auth(config, get_playlist_tracks, playlist_id)
 
@@ -202,8 +221,8 @@ def _download_spotify_playlist(config: Config, playlist_id: str) -> None:
 
 def _download_liked(config: Config) -> None:
     """Download all liked/saved tracks from Spotify."""
-    from spidal.download import download_tracks
-    from spidal.spotify import get_liked_tracks
+    from spidal.core.download import download_tracks
+    from spidal.core.spotify import get_liked_tracks
 
     tracks = _with_spotify_auth(config, get_liked_tracks)
 

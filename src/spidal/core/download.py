@@ -8,10 +8,10 @@ from pathlib import Path
 
 import requests
 
-from spidal.config import Config
-from spidal.hifi import iter_stream_urls
-from spidal.persistence import get_db, save_track
-from spidal.tagging import tag_flac, tag_m4a, tag_ogg, tag_webm
+from spidal.core.config import Config
+from spidal.core.hifi import iter_stream_urls
+from spidal.core.persistence import get_db, save_track
+from spidal.core.tagging import tag_flac, tag_m4a, tag_ogg, tag_webm
 
 logger = logging.getLogger(__name__)
 
@@ -138,36 +138,16 @@ def _download_dash(
     return True
 
 
-def _persist(
-    track: dict,
-    track_id: int,
-    title: str,
-    artist: str,
-    album: str,
-    track_number: int,
-    status: str,
-    file_path: str | None = None,
-) -> None:
+def _persist(track: dict, file_path: str | None = None) -> None:
     """Best-effort save of a track record to the database."""
     try:
         db = get_db()
-        save_track(
-            db,
-            {
-                "isrc": track.get("isrc"),
-                "id": track_id,
-                "title": title,
-                "artist": artist,
-                "album": album,
-                "track_number": track_number,
-                "duration": track.get("duration"),
-            },
-            status,
-            file_path,
-        )
+        save_track(db, track, file_path)
         db.close()
     except Exception:
-        logger.warning("Failed to persist track %s", track_id, exc_info=True)
+        logger.warning(
+            "Failed to persist track %s", track.get("hifi_id") or track.get("id"), exc_info=True
+        )
 
 
 def _attempt_streams(
@@ -241,9 +221,9 @@ def download_track(
         Tuple of (status, file_path) where status is "downloaded" or
         "failed", and file_path is the path string (None on failure).
     """
-    track_id = track["id"]
-    title = track.get("title") or track.get("name") or "Unknown"
-    track_number = track.get("track_number") or 0
+    track_id = track.get("hifi_id")
+    title = track.get("hifi_title") or "Unknown"
+    track_number = track.get("hifi_track_number") or 0
 
     safe_artist = _sanitize(artist)
     safe_album = _sanitize(album)
@@ -255,21 +235,21 @@ def download_track(
 
     if file_path.exists():
         logger.info("Already exists: %s", file_path)
-        _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
+        _persist(track, str(file_path))
         return "skipped", str(file_path)
 
     try:
         streams = iter_stream_urls(config.get_apis(), track_id)
     except ConnectionError as e:
         logger.error("Failed to get stream URL for track %s: %s", track_id, e)
-        _persist(track, track_id, title, artist, album, track_number, "failed")
+        _persist(track)
         return "failed", None
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not _attempt_streams(streams, file_path, on_progress):
         _cleanup(file_path)
-        _persist(track, track_id, title, artist, album, track_number, "failed")
+        _persist(track)
         return "failed", None
 
     # Rename if the actual format doesn't match the .flac extension
@@ -281,7 +261,7 @@ def download_track(
         logger.info("Renamed to %s (actual format: %s)", file_path.name, actual_ext)
 
     logger.info("Downloaded: %s", file_path)
-    _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
+    _persist(track, str(file_path))
     _tag_file(config, file_path, track, artist, album)
 
     return "downloaded", str(file_path)
@@ -310,8 +290,8 @@ def download_tracks(
     total = len(tracks)
 
     for i, track in enumerate(tracks):
-        artist = track.get("artist") or "Unknown"
-        album = track.get("album") or "Unknown"
+        artist = track.get("hifi_artist") or "Unknown"
+        album = track.get("hifi_album") or "Unknown"
         status, path = download_track(config, track, artist, album)
         display_status = "downloaded" if status in ("downloaded", "skipped") else status
         counts[display_status] = counts.get(display_status, 0) + 1

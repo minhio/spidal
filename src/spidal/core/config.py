@@ -19,12 +19,12 @@ CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / 
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DOWNLOAD_DIR = Path.home() / "Music" / "spidal"
+SPOTIFY_API_URL = "https://api.spotify.com/v1"
 
 DEFAULTS: dict[str, str | None] = {
-    "spotify-api-url": "https://api.spotify.com/v1",
     "spotify-token": None,
     "hifi-api": None,
-    "hifi-api-file": "https://raw.githubusercontent.com/monochrome-music/monochrome/main/public/instances.json",
+    "hifi-api-file": None,
     "download-dir": str(DOWNLOAD_DIR),
     "download-delay": "0",
     "disable-tagging": "false",
@@ -87,7 +87,6 @@ def _load_apis_from_source(source: str) -> list[str]:
 
 @dataclass
 class Config:
-    spotify_api_url: str | None = None
     spotify_token: str | None = None
     hifi_api: str | None = None
     hifi_api_file: str | None = None
@@ -95,6 +94,11 @@ class Config:
     download_delay: str | None = None
     disable_tagging: str | None = None
     _apis_cache: list[str] | None = field(default=None, init=False, repr=False)
+    _sources: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+
+    @classmethod
+    def valid_keys(cls) -> set[str]:
+        return {f.name.replace("_", "-") for f in fields(cls) if f.init}
 
     @classmethod
     def load(cls, **overrides: str | None) -> Config:
@@ -105,6 +109,7 @@ class Config:
         saved = load_config_file()
 
         values: dict[str, str | None] = {}
+        sources: dict[str, str] = {}
         for f in fields(cls):
             if not f.init:
                 continue
@@ -126,9 +131,11 @@ class Config:
             else:
                 values[f.name] = default
                 source = "default"
+            sources[f.name] = source
             logger.info("Config %s=%s (source: %s)", dashed, values[f.name], source)
 
         config = cls(**values)
+        config._sources = sources
         if config.hifi_api and config.hifi_api_file:
             raise ValueError("Cannot set both hifi-api and hifi-api-file")
 
@@ -139,18 +146,76 @@ class Config:
         if self._apis_cache is not None:
             return self._apis_cache
 
+        _INSTANCES_URL = "https://raw.githubusercontent.com/monochrome-music/monochrome/main/public/instances.json"
         if self.hifi_api:
             self._apis_cache = [self.hifi_api]
-        elif not self.hifi_api_file:
-            self._apis_cache = []
         else:
-            self._apis_cache = _load_apis_from_source(self.hifi_api_file)
+            self._apis_cache = _load_apis_from_source(self.hifi_api_file or _INSTANCES_URL)
 
         return self._apis_cache
 
-    def set_spotify_token(self, token: str) -> None:
-        logger.info("Saving Spotify token to config file")
-        self.spotify_token = token
+    def get_spotify_token(self) -> str | None:
+        return self.spotify_token
+
+    def get_hifi_api(self) -> str | None:
+        return self.hifi_api
+
+    def get_hifi_api_file(self) -> str | None:
+        return self.hifi_api_file
+
+    def get_download_dir(self) -> str | None:
+        return self.download_dir
+
+    def get_download_delay(self) -> str | None:
+        return self.download_delay
+
+    def get_disable_tagging(self) -> str | None:
+        return self.disable_tagging
+
+    def items(self) -> list[tuple[str, str | None, str]]:
+        result = []
+        for f in fields(self):
+            if not f.init:
+                continue
+            dashed = f.name.replace("_", "-")
+            value = getattr(self, f.name)
+            source = self._sources.get(f.name, "unknown")
+            result.append((dashed, value, source))
+        return result
+
+    def get_source(self, key: str) -> str:
+        field_name = key.replace("-", "_")
+        return self._sources.get(field_name, "unknown")
+
+    def _set(self, name: str, value: str) -> None:
+        setattr(self, name, value)
+        self._sources[name] = "file"
+        dashed = name.replace("_", "-")
+        logger.info("Saving %s to config file", dashed)
         saved = load_config_file()
-        saved["spotify-token"] = token
+        saved[dashed] = value
         save_config_file(saved)
+
+    def set_spotify_token(self, token: str) -> None:
+        self._set("spotify_token", token)
+
+    def set_hifi_api(self, api: str) -> None:
+        if self.hifi_api_file:
+            raise ValueError("Cannot set both hifi-api and hifi-api-file")
+        self._set("hifi_api", api)
+        self._apis_cache = None
+
+    def set_hifi_api_file(self, path: str) -> None:
+        if self.hifi_api:
+            raise ValueError("Cannot set both hifi-api and hifi-api-file")
+        self._set("hifi_api_file", path)
+        self._apis_cache = None
+
+    def set_download_dir(self, directory: str) -> None:
+        self._set("download_dir", directory)
+
+    def set_download_delay(self, delay: str) -> None:
+        self._set("download_delay", delay)
+
+    def set_disable_tagging(self, value: str) -> None:
+        self._set("disable_tagging", value)

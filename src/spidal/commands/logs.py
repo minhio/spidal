@@ -29,7 +29,7 @@ def logs(
     plain: bool = typer.Option(False, "--plain", help="Plain text, no color"),
 ) -> None:
     """Display the last N lines of the log file."""
-    from spidal.config import LOG_DIR
+    from spidal.core.config import LOG_DIR
 
     log_file = LOG_DIR / "spidal.log"
     if not log_file.exists():

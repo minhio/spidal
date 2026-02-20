@@ -32,6 +32,7 @@ def _parse_track(track: dict) -> dict:
     }
 
 
+
 def _parse_album(album: dict) -> dict:
     artists_list = album.get("artists") or []
     artist = (album.get("artist") or {}).get("name") or (
@@ -117,7 +118,6 @@ def search_albums(apis: list[str], query: str) -> tuple[list[dict], int]:
     return [_parse_album(a) for a in items], total
 
 
-
 def match_track(apis: list[str], query: str, isrc: str) -> dict | None:
     """Search for a track and match by ISRC.
 
@@ -140,7 +140,6 @@ def match_track(apis: list[str], query: str, isrc: str) -> dict | None:
 
     logger.warning("No ISRC match for %s in %d results", isrc, len(results))
     return None
-
 
 
 def get_album_tracks(apis: list[str], album_id: int) -> tuple[str, list[dict]]:
@@ -338,7 +337,6 @@ def _extract_stream_url(data: dict) -> str | list[str] | None:
 
     logger.warning("Unrecognised manifest format")
     return None
-
 
 
 def iter_stream_urls(
