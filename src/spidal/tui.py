@@ -434,7 +434,7 @@ class SpotifyWidget(Vertical):
         if event.input.id == "token-input":
             token = event.value.strip()
             if token:
-                self.config.set_spotify_token(token)
+                self.config.set("spotify_token", token)
                 self._refresh_view()
 
 

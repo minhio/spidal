@@ -32,7 +32,6 @@ def main(
     ctx: typer.Context,
     spotify_token: Optional[str] = typer.Option(None),
     hifi_api: Optional[str] = typer.Option(None),
-    hifi_api_file: Optional[str] = typer.Option(None),
     download_dir: Optional[Path] = typer.Option(None),
     version: Optional[bool] = typer.Option(
         None, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
@@ -43,7 +42,6 @@ def main(
     config = Config.load(
         spotify_token=spotify_token,
         hifi_api=hifi_api,
-        hifi_api_file=hifi_api_file,
         download_dir=str(download_dir) if download_dir else None,
     )
     ctx.obj = config

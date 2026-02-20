@@ -10,13 +10,13 @@ config_app = typer.Typer()
 
 
 def _validate_key(key: str) -> str:
-    dashed = key.replace("_", "-")
+    name = key.replace("-", "_")
     valid_keys = Config.valid_keys()
-    if dashed not in valid_keys:
+    if name not in valid_keys:
         typer.echo(f"Unknown key: {key}", err=True)
         typer.echo(f"Valid keys: {', '.join(sorted(valid_keys))}", err=True)
         raise typer.Exit(1)
-    return dashed
+    return name
 
 
 @config_app.callback(invoke_without_command=True)
@@ -32,15 +32,12 @@ def config_get(
     key: str = typer.Argument(help="Config key to get."),
 ) -> None:
     """Get a configuration value."""
-    dashed_key = _validate_key(key)
-    field_name = dashed_key.replace("-", "_")
-
+    name = _validate_key(key)
     config: Config = ctx.obj
-    getter = getattr(config, f"get_{field_name}")
-    value = getter()
-    source = config.get_source(dashed_key)
+    value = getattr(config, name)
+    source = config.get_source(name)
     display = value if value is not None else "(not set)"
-    typer.echo(f"{dashed_key}: {display}  [{source}]")
+    typer.echo(f"{name}: {display}  [{source}]")
 
 
 @config_app.command("set")
@@ -50,13 +47,10 @@ def config_set(
     value: str = typer.Argument(help="Value to set."),
 ) -> None:
     """Set a configuration value."""
-    dashed_key = _validate_key(key)
-    field_name = dashed_key.replace("-", "_")
-
+    name = _validate_key(key)
     config: Config = ctx.obj
-    setter = getattr(config, f"set_{field_name}")
-    setter(value)
-    typer.echo(f"{dashed_key}: {value}")
+    config.set(name, value)
+    typer.echo(f"{name}: {value}")
 
 
 @config_app.command("list")

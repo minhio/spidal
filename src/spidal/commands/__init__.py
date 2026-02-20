@@ -13,7 +13,7 @@ def _prompt_token(config: Config) -> None:
     logger.info("Prompting user for Spotify token")
     webbrowser.open("https://developer.spotify.com")
     token = input("Paste your Spotify API token: ").strip()
-    config.set_spotify_token(token)
+    config.set("spotify_token", token)
     logger.info("Spotify token updated")
 
 
