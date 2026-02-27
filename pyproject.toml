@@ -9,6 +9,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "imageio-ffmpeg>=0.6.0",
     "musicbrainzngs>=0.7.1",
     "mutagen>=1.47.0",
     "requests>=2.32.5",

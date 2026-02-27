@@ -208,6 +208,7 @@ def download_track(
     artist: str,
     album: str,
     on_progress: Callable[[int, int], None] | None = None,
+    on_error: Callable[[dict, Exception], None] | None = None,
 ) -> tuple[str, str | None]:
     """Download a FLAC track from the hifi API.
 
@@ -242,12 +243,17 @@ def download_track(
         streams = iter_stream_urls(config.get_apis(), track_id)
     except ConnectionError as e:
         logger.error("Failed to get stream URL for track %s: %s", track_id, e)
+        if on_error:
+            on_error(track, e)
         _persist(track)
         return "failed", None
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not _attempt_streams(streams, file_path, on_progress):
+        err = RuntimeError(f"All stream URLs failed for track {track_id}")
+        if on_error:
+            on_error(track, err)
         _cleanup(file_path)
         _persist(track)
         return "failed", None
@@ -274,6 +280,7 @@ def download_tracks(
     config: Config,
     tracks: list[dict],
     on_progress: Callable[[int, int, str, str | None], None] | None = None,
+    on_error: Callable[[dict, Exception], None] | None = None,
 ) -> dict[str, int]:
     """Download a list of tracks with a delay between each.
 
@@ -292,7 +299,16 @@ def download_tracks(
     for i, track in enumerate(tracks):
         artist = track.get("hifi_artist") or "Unknown"
         album = track.get("hifi_album") or "Unknown"
-        status, path = download_track(config, track, artist, album)
+        try:
+            status, path = download_track(config, track, artist, album, on_error=on_error)
+        except Exception as e:
+            logger.error("Unexpected error downloading track %s: %s", track.get("hifi_id"), e)
+            if on_error:
+                on_error(track, e)
+            counts["failed"] = counts.get("failed", 0) + 1
+            if on_progress:
+                on_progress(i + 1, total, "failed", None)
+            continue
         display_status = "downloaded" if status in ("downloaded", "skipped") else status
         counts[display_status] = counts.get(display_status, 0) + 1
 
