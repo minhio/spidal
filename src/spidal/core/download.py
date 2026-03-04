@@ -2,21 +2,29 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 import time
-from collections.abc import Callable
 from pathlib import Path
 
+import imageio_ffmpeg
 import requests
 
 from spidal.core.config import Config
 from spidal.core.hifi import iter_stream_urls
-from spidal.core.persistence import get_db, save_track
 from spidal.core.tagging import tag_flac, tag_m4a, tag_ogg, tag_webm
+from spidal.core.track import Track
 
 logger = logging.getLogger(__name__)
 
 MIN_FILE_SIZE = 50 * 1024  # 50 KB
 MAX_RETRIES = 3
+
+TAGGERS = {
+    ".flac": tag_flac,
+    ".m4a": tag_m4a,
+    ".ogg": tag_ogg,
+    ".webm": tag_webm,
+}
 
 
 def _sniff_extension(path: Path) -> str:
@@ -60,11 +68,7 @@ def _cleanup(file_path: Path) -> None:
             break
 
 
-def _download_direct(
-    url: str,
-    file_path: Path,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> bool:
+def _download_direct(url: str, file_path: Path) -> bool:
     """Download a file from a direct URL. Returns True on success."""
     resp = requests.get(url, stream=True, timeout=30)
     if not resp.ok:
@@ -76,22 +80,13 @@ def _download_direct(
         logger.warning("Received %s instead of audio", content_type)
         return False
 
-    total = int(resp.headers.get("content-length") or 0)
-    written = 0
     with open(file_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=64 * 1024):
             f.write(chunk)
-            if on_progress and total:
-                written += len(chunk)
-                on_progress(written, total)
     return True
 
 
-def _download_dash(
-    segments: list[str],
-    file_path: Path,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> bool:
+def _download_dash(segments: list[str], file_path: Path) -> bool:
     """Download DASH segments sequentially and concatenate. Returns True on success."""
     with open(file_path, "wb") as f:
         for i, url in enumerate(segments):
@@ -111,8 +106,6 @@ def _download_dash(
                         logger.warning("Empty segment %d/%d", i + 1, len(segments))
                         return False
                     f.write(resp.content)
-                    if on_progress:
-                        on_progress(i + 1, len(segments))
                     success = True
                     break
                 except requests.RequestException as e:
@@ -138,31 +131,15 @@ def _download_dash(
     return True
 
 
-def _persist(track: dict, file_path: str | None = None) -> None:
-    """Best-effort save of a track record to the database."""
-    try:
-        db = get_db()
-        save_track(db, track, file_path)
-        db.close()
-    except Exception:
-        logger.warning(
-            "Failed to persist track %s", track.get("hifi_id") or track.get("id"), exc_info=True
-        )
-
-
-def _attempt_streams(
-    streams: object,
-    file_path: Path,
-    on_progress: Callable[[int, int], None] | None,
-) -> bool:
+def _attempt_streams(streams: object, file_path: Path) -> bool:
     """Try each stream URL, cleaning up between attempts. Returns True on success."""
     for stream in streams:  # type: ignore[union-attr]
         if isinstance(stream, list):
             logger.info("Downloading %d DASH segments", len(stream))
-            ok = _download_dash(stream, file_path, on_progress)
+            ok = _download_dash(stream, file_path)
         else:
             logger.info("Downloading from %s", stream[:80])
-            ok = _download_direct(stream, file_path, on_progress)
+            ok = _download_direct(stream, file_path)
 
         if ok and file_path.stat().st_size >= MIN_FILE_SIZE:
             return True
@@ -178,147 +155,112 @@ def _attempt_streams(
     return False
 
 
-def _tag_file(
-    config: Config,
-    file_path: Path,
-    track: dict,
-    artist: str,
-    album: str,
-) -> None:
+def _convert_m4a_to_flac(m4a_path: Path) -> Path:
+    """Convert an M4A file to FLAC using ffmpeg. Returns the FLAC path."""
+    flac_path = m4a_path.with_suffix(".flac")
+    ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+    subprocess.run(
+        [ffmpeg, "-i", str(m4a_path), "-c:a", "flac", str(flac_path)],
+        check=True,
+        capture_output=True,
+    )
+    m4a_path.unlink()
+    logger.info("Converted M4A to FLAC: %s", flac_path.name)
+    return flac_path
+
+
+def _tag_file(file_path: Path, hifi_track: Track) -> None:
     """Tag the downloaded file using the appropriate tagger for its format."""
-    if config.disable_tagging and config.disable_tagging.lower() not in ("false", "0", ""):
-        logger.info("Tagging disabled, skipping: %s", file_path.name)
-        return
-    _TAGGERS = {
-        ".flac": tag_flac,
-        ".m4a": tag_m4a,
-        ".ogg": tag_ogg,
-        ".webm": tag_webm,
-    }
-    tagger = _TAGGERS.get(file_path.suffix)
+    tagger = TAGGERS.get(file_path.suffix)
     if tagger:
-        tagger(str(file_path), track, artist, album)
+        tagger(str(file_path), hifi_track)
     else:
         logger.warning("No tagger for format %s: %s", file_path.suffix, file_path.name)
 
 
-def download_track(
-    config: Config,
-    track: dict,
-    artist: str,
-    album: str,
-    on_progress: Callable[[int, int], None] | None = None,
-    on_error: Callable[[dict, Exception], None] | None = None,
-) -> tuple[str, str | None]:
-    """Download a FLAC track from the hifi API.
+def download_track(config: Config, hifi_track: Track) -> tuple[str, str | None]:
+    """Download a track from the hifi API.
 
     Args:
         config: Config with API endpoints and download_dir.
-        track: Matched hifi track dict (from match_track).
-        artist: Artist name for directory structure.
-        album: Album name for directory structure.
+        hifi_track: Matched hifi Track (from match_tracks_by_isrc).
 
     Returns:
-        Tuple of (status, file_path) where status is "downloaded" or
-        "failed", and file_path is the path string (None on failure).
+        Tuple of (status, file_path) where status is "downloaded", "existed",
+        or "failed", and file_path is the path string (None on failure).
     """
-    track_id = track.get("hifi_id")
-    title = track.get("hifi_title") or "Unknown"
-    track_number = track.get("hifi_track_number") or 0
+    if not hifi_track.id or not hifi_track.artist or not hifi_track.album or not hifi_track.title:
+        raise ValueError(f"Track missing required fields: {hifi_track}")
 
-    safe_artist = _sanitize(artist)
-    safe_album = _sanitize(album)
-    safe_title = _sanitize(title)
-    filename = f"{int(track_number):02d} - {safe_title}.flac"
+    stem = f"{int(hifi_track.track_number or 0):02d} - {_sanitize(hifi_track.title)}"
 
-    download_dir = Path(config.download_dir or "downloads")
-    file_path = download_dir / safe_artist / safe_album / filename
-
-    if file_path.exists():
-        logger.info("Already exists: %s", file_path)
-        _persist(track, str(file_path))
-        return "skipped", str(file_path)
+    download_dir = Path(config.download_dir)
+    track_dir = download_dir / _sanitize(hifi_track.artist) / _sanitize(hifi_track.album)
+    existing = next(track_dir.glob(f"{stem}.*"), None)
+    if existing:
+        logger.info("Already exists: %s", existing)
+        return "existed", str(existing)
 
     try:
-        streams = iter_stream_urls(config.get_apis(), track_id)
+        streams = iter_stream_urls(config.get_apis(), hifi_track.id)
     except ConnectionError as e:
-        logger.error("Failed to get stream URL for track %s: %s", track_id, e)
-        if on_error:
-            on_error(track, e)
-        _persist(track)
+        logger.error("Failed to get stream URL for track %s: %s", hifi_track.id, e)
         return "failed", None
 
-    file_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = track_dir / f"{stem}.tmp"
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if not _attempt_streams(streams, file_path, on_progress):
-        err = RuntimeError(f"All stream URLs failed for track {track_id}")
-        if on_error:
-            on_error(track, err)
-        _cleanup(file_path)
-        _persist(track)
+    if not _attempt_streams(streams, tmp_path):
+        _cleanup(tmp_path)
         return "failed", None
 
-    # Rename if the actual format doesn't match the .flac extension
-    actual_ext = _sniff_extension(file_path)
-    if actual_ext != file_path.suffix:
-        new_path = file_path.with_suffix(actual_ext)
-        file_path.rename(new_path)
-        file_path = new_path
-        logger.info("Renamed to %s (actual format: %s)", file_path.name, actual_ext)
+    actual_ext = _sniff_extension(tmp_path)
+    file_path = track_dir / f"{stem}{actual_ext}"
+    tmp_path.rename(file_path)
+
+    if file_path.suffix == ".m4a" and not config.disable_mp4_to_flac:
+        file_path = _convert_m4a_to_flac(file_path)
 
     logger.info("Downloaded: %s", file_path)
-    _persist(track, str(file_path))
-    _tag_file(config, file_path, track, artist, album)
+
+    if not config.disable_tagging:
+        _tag_file(file_path, hifi_track)
 
     return "downloaded", str(file_path)
 
 
-TRACK_DELAY = 0  # seconds between downloads (MusicBrainz calls provide natural delay)
-
-
 def download_tracks(
-    config: Config,
-    tracks: list[dict],
-    on_progress: Callable[[int, int, str, str | None], None] | None = None,
-    on_error: Callable[[dict, Exception], None] | None = None,
-) -> dict[str, int]:
-    """Download a list of tracks with a delay between each.
+    config: Config, hifi_tracks: list[Track]
+) -> dict[str, list[tuple[Track, str | None]]]:
+    """Download a list of tracks.
 
     Args:
         config: Config with API endpoints and download_dir.
-        tracks: List of track dicts, each with at least 'id', 'artist', 'album'.
-        on_progress: Optional callback called after each track with
-            (current_index, total, status, file_path).
+        hifi_tracks: List of matched Track objects.
 
     Returns:
-        Dict with counts: {"downloaded": N, "failed": N}.
+        Dict mapping status to list of (track, file_path) pairs:
+        {"downloaded": [...], "existed": [...], "failed": [...]}.
+        file_path is None for failed tracks.
     """
-    counts: dict[str, int] = {"downloaded": 0, "failed": 0}
-    total = len(tracks)
+    results: dict[str, list[tuple[Track, str | None]]] = {
+        "downloaded": [],
+        "existed": [],
+        "failed": [],
+    }
+    total = len(hifi_tracks)
 
-    for i, track in enumerate(tracks):
-        artist = track.get("hifi_artist") or "Unknown"
-        album = track.get("hifi_album") or "Unknown"
+    for i, hifi_track in enumerate(hifi_tracks):
         try:
-            status, path = download_track(config, track, artist, album, on_error=on_error)
+            status, file_path = download_track(config, hifi_track)
         except Exception as e:
-            logger.error("Unexpected error downloading track %s: %s", track.get("hifi_id"), e)
-            if on_error:
-                on_error(track, e)
-            counts["failed"] = counts.get("failed", 0) + 1
-            if on_progress:
-                on_progress(i + 1, total, "failed", None)
+            logger.error("Unexpected error downloading track %s: %s", hifi_track.id, e)
+            results["failed"].append((hifi_track, None))
             continue
-        display_status = "downloaded" if status in ("downloaded", "skipped") else status
-        counts[display_status] = counts.get(display_status, 0) + 1
+        results[status].append((hifi_track, file_path))
 
-        if on_progress:
-            on_progress(i + 1, total, display_status, path)
+        if i < total - 1 and status == "downloaded" and config.download_delay > 0:
+            logger.debug("Waiting %ds before next track", config.download_delay)
+            time.sleep(config.download_delay)
 
-        if i < total - 1 and status == "downloaded":
-            delay = int(config.download_delay or TRACK_DELAY)
-            if delay:
-                logger.debug("Waiting %ds before next track", delay)
-                time.sleep(delay)
-
-    return counts
+    return results

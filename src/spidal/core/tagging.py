@@ -10,6 +10,8 @@ from mutagen.mp4 import MP4, MP4FreeForm
 from mutagen.oggopus import OggOpus
 from mutagen.oggvorbis import OggVorbis
 
+from spidal.core.track import Track
+
 logger = logging.getLogger(__name__)
 
 musicbrainzngs.set_useragent("spidal", "0.1", "https://github.com/minhio/spidal")
@@ -118,15 +120,17 @@ def _artist_credit_name(credits: list) -> str:
     return "".join(parts).strip()
 
 
-def _build_base_tags(track: dict, artist: str, album: str) -> dict[str, str]:
+def _build_base_tags(hifi_track: Track) -> dict[str, str]:
     """Build tags from hifi data only (no MusicBrainz calls).
 
     Keys use VorbisComment naming (TITLE, ARTIST, TRACKNUMBER, etc.).
     Values are always strings.
     """
-    title = track.get("title") or track.get("name") or ""
-    track_number = track.get("track_number") or 0
-    isrc = track.get("isrc") or ""
+    title = hifi_track.title or ""
+    artist = hifi_track.artist or ""
+    album = hifi_track.album or ""
+    track_number = hifi_track.track_number
+    isrc = hifi_track.isrc or ""
 
     tags: dict[str, str] = {}
     if title:
@@ -191,9 +195,9 @@ def _enrich_with_mb(tags: dict[str, str], isrc: str) -> None:
             tags["TRACKTOTAL"] = str(track_total)
 
 
-def _build_tags(track: dict, artist: str, album: str) -> dict[str, str]:
+def _build_tags(hifi_track: Track) -> dict[str, str]:
     """Build a neutral tag dict from hifi data enriched with MusicBrainz lookups."""
-    tags = _build_base_tags(track, artist, album)
+    tags = _build_base_tags(hifi_track)
     isrc = tags.get("ISRC", "")
     if isrc:
         _enrich_with_mb(tags, isrc)
@@ -230,7 +234,7 @@ def _write_vorbiscomment(audio: object, tags: dict[str, str], file_path: str) ->
         logger.warning("Failed to save tags for %s: %s", file_path, e)
 
 
-def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
+def tag_flac(file_path: str, hifi_track: Track) -> None:
     """Write VorbisComment tags to a FLAC file. Best-effort."""
     path = Path(file_path)
     if not path.exists():
@@ -241,10 +245,10 @@ def tag_flac(file_path: str, track: dict, artist: str, album: str) -> None:
     except Exception as e:
         logger.warning("Failed to open FLAC for tagging %s: %s", file_path, e)
         return
-    _write_vorbiscomment(audio, _build_tags(track, artist, album), file_path)
+    _write_vorbiscomment(audio, _build_tags(hifi_track), file_path)
 
 
-def tag_ogg(file_path: str, track: dict, artist: str, album: str) -> None:
+def tag_ogg(file_path: str, hifi_track: Track) -> None:
     """Write VorbisComment tags to an OGG file (Vorbis or Opus). Best-effort."""
     path = Path(file_path)
     if not path.exists():
@@ -258,15 +262,15 @@ def tag_ogg(file_path: str, track: dict, artist: str, album: str) -> None:
     if not isinstance(audio, (OggVorbis, OggOpus)):
         logger.warning("Unexpected OGG type %s for %s", type(audio).__name__, file_path)
         return
-    _write_vorbiscomment(audio, _build_tags(track, artist, album), file_path)
+    _write_vorbiscomment(audio, _build_tags(hifi_track), file_path)
 
 
-def tag_webm(file_path: str, track: dict, artist: str, album: str) -> None:
+def tag_webm(file_path: str, _hifi_track: Track) -> None:
     """Tag a WebM file. mutagen has no native WebM support — logs a warning."""
     logger.warning("WebM tagging not supported, file will be untagged: %s", file_path)
 
 
-def tag_m4a(file_path: str, track: dict, artist: str, album: str) -> None:
+def tag_m4a(file_path: str, hifi_track: Track) -> None:
     """Write iTunes-style tags to an M4A file.
 
     Best-effort: tag errors are logged but never raise.
@@ -282,7 +286,7 @@ def tag_m4a(file_path: str, track: dict, artist: str, album: str) -> None:
         logger.warning("Failed to open M4A for tagging %s: %s", file_path, e)
         return
 
-    tags = _build_tags(track, artist, album)
+    tags = _build_tags(hifi_track)
 
     for vorbis_key, mp4_key in _MP4_SIMPLE.items():
         if vorbis_key in tags:

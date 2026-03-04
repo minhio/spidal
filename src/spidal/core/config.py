@@ -12,22 +12,20 @@ import requests
 logger = logging.getLogger(__name__)
 
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "spidal"
-LOG_DIR = STATE_DIR / "logs"
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "spidal"
+LOG_DIR = STATE_DIR / "logs"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-DOWNLOAD_DIR = Path.home() / "Music" / "spidal"
 
 SPOTIFY_API_URL = "https://api.spotify.com/v1"
 HIFI_API_INSTANCES_URL = "https://raw.githubusercontent.com/monochrome-music/monochrome/main/public/instances.json"
 
-DEFAULTS: dict[str, str | None] = {
-    "spotify_token": None,
-    "hifi_api": None,
-    "download_dir": str(DOWNLOAD_DIR),
-    "download_delay": "0",
-    "disable_tagging": "false",
-    "disable_mp4_to_flac": "false",
-}
+_BOOL_FIELDS = {"disable_tagging", "disable_mp4_to_flac"}
+
+
+def _parse_bool(v: str | bool | None) -> bool:
+    if isinstance(v, bool):
+        return v
+    return bool(v) and v.lower() not in ("false", "0", "")
 
 
 def setup_logging() -> None:
@@ -82,10 +80,10 @@ def _load_apis_from_url(url: str) -> list[str]:
 class Config:
     spotify_token: str | None = None
     hifi_api: str | None = None
-    download_dir: str | None = None
-    download_delay: str | None = None
-    disable_tagging: str | None = None
-    disable_mp4_to_flac: str | None = None
+    download_dir: str = str(Path.home() / "Music" / "spidal")
+    download_delay: int = 0
+    disable_tagging: bool = False
+    disable_mp4_to_flac: bool = False
     _apis_cache: list[str] | None = field(default=None, init=False, repr=False)
     _sources: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
@@ -106,7 +104,6 @@ class Config:
         for f in fields(cls):
             if not f.init:
                 continue
-            default = DEFAULTS.get(f.name)
             override = overrides.get(f.name)
             saved_val = saved.get(f.name)
 
@@ -117,10 +114,15 @@ class Config:
                 values[f.name] = saved_val
                 source = "file"
             else:
-                values[f.name] = default
                 source = "default"
             sources[f.name] = source
-            logger.info("Config %s=%s (source: %s)", f.name, values[f.name], source)
+            logger.info("Config %s=%s (source: %s)", f.name, values.get(f.name, f.default), source)
+
+        for name in _BOOL_FIELDS:
+            if name in values:
+                values[name] = _parse_bool(values[name])  # type: ignore[assignment]
+        if "download_delay" in values and values["download_delay"] is not None:
+            values["download_delay"] = int(values["download_delay"])  # type: ignore[assignment]
 
         config = cls(**values)
         config._sources = sources
@@ -157,7 +159,7 @@ class Config:
         name = key.replace("-", "_")
         if name not in self.valid_keys():
             raise ValueError(f"Unknown config key: {key}")
-        setattr(self, name, value)
+        setattr(self, name, _parse_bool(value) if name in _BOOL_FIELDS else value)
         self._sources[name] = "file"
         logger.info("Saving %s to config file", name)
         saved = load_config_file()

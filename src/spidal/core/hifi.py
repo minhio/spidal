@@ -11,32 +11,34 @@ from urllib.parse import quote
 
 import requests
 
+from spidal.core.track import Track
+
 logger = logging.getLogger(__name__)
 
 _QUALITY_FALLBACK = ("HI_RES_LOSSLESS", "LOSSLESS")
 
 
-def _parse_track(track: dict) -> dict:
+def _parse_track(track: dict) -> Track:
     artists_list = track.get("artists") or []
     artist = (track.get("artist") or {}).get("name") or (
-        artists_list[0].get("name", "Unknown") if artists_list else "Unknown"
+        artists_list[0].get("name") if artists_list else None
     )
-    return {
-        "id": track["id"],
-        "title": track.get("title"),
-        "artist": artist,
-        "album": (track.get("album") or {}).get("title"),
-        "track_number": track.get("trackNumber"),
-        "isrc": track.get("isrc"),
-        "duration": track.get("duration"),
-    }
+    return Track(
+        id=track["id"],
+        title=track.get("title"),
+        artist=artist,
+        album=(track.get("album") or {}).get("title"),
+        track_number=track.get("trackNumber"),
+        isrc=track.get("isrc"),
+        duration=track.get("duration"),
+    )
 
 
 
 def _parse_album(album: dict) -> dict:
     artists_list = album.get("artists") or []
     artist = (album.get("artist") or {}).get("name") or (
-        artists_list[0].get("name", "Unknown") if artists_list else "Unknown"
+        artists_list[0].get("name") if artists_list else None
     )
     return {
         "id": album["id"],
@@ -82,7 +84,7 @@ def _request(apis: list[str], path: str, **params: str) -> dict | None:
     return None
 
 
-def search_tracks(apis: list[str], query: str) -> tuple[list[dict], int]:
+def search_tracks(apis: list[str], query: str) -> tuple[list[Track], int]:
     """Fetch a single page of search results.
 
     Returns:
@@ -118,7 +120,7 @@ def search_albums(apis: list[str], query: str) -> tuple[list[dict], int]:
     return [_parse_album(a) for a in items], total
 
 
-def match_track(apis: list[str], query: str, isrc: str) -> dict | None:
+def match_track(apis: list[str], query: str, isrc: str) -> Track | None:
     """Search for a track and match by ISRC.
 
     The API ignores offset/limit params and always returns the first 25
@@ -130,19 +132,19 @@ def match_track(apis: list[str], query: str, isrc: str) -> dict | None:
         isrc: ISRC code to match against.
 
     Returns:
-        Matched track dict, or None if no ISRC match found.
+        Matched Track, or None if no ISRC match found.
     """
     results, _ = search_tracks(apis, query)
     for track in results:
-        if track.get("isrc") == isrc:
-            logger.info("ISRC match found: %s (id=%s)", isrc, track["id"])
+        if track.isrc == isrc:
+            logger.info("ISRC match found: %s (id=%s)", isrc, track.id)
             return track
 
     logger.warning("No ISRC match for %s in %d results", isrc, len(results))
     return None
 
 
-def get_album_tracks(apis: list[str], album_id: int) -> tuple[str, list[dict]]:
+def get_album_tracks(apis: list[str], album_id: int) -> tuple[str | None, list[Track]]:
     """Fetch all tracks from an album.
 
     Returns:
@@ -157,7 +159,7 @@ def get_album_tracks(apis: list[str], album_id: int) -> tuple[str, list[dict]]:
         logger.error("Album not found: %s", album_id)
         raise ValueError(f"Album not found: {album_id}")
 
-    album_title = data.get("title") or "Unknown"
+    album_title = data.get("title")
     raw_items = data.get("items", [])
     total = data.get("numberOfTracks") or len(raw_items)
 
@@ -190,7 +192,7 @@ def get_album_tracks(apis: list[str], album_id: int) -> tuple[str, list[dict]]:
     return album_title, [_parse_track(t) for t in items]
 
 
-def get_track_info(apis: list[str], track_id: int) -> dict | None:
+def get_track_info(apis: list[str], track_id: int) -> Track | None:
     """Fetch full track info from the hifi API.
 
     Args:

@@ -1,17 +1,62 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, fields
 import logging
 
 from tinydb import TinyDB, where
 from tinydb.table import Table
 
 from spidal.core.config import STATE_DIR
+from spidal.core.track import Track
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = STATE_DIR / "db.json"
 
 TRACKS_TABLE = "tracks"
+
+@dataclass
+class TrackEntry:
+    isrc: str | None = None
+    spotify_id: str | None = None
+    spotify_title: str | None = None
+    spotify_artist: str | None = None
+    spotify_album: str | None = None
+    spotify_track_number: int | None = None
+    spotify_duration: int | None = None
+    hifi_id: int | None = None
+    hifi_title: str | None = None
+    hifi_artist: str | None = None
+    hifi_album: str | None = None
+    hifi_track_number: int = 0
+    hifi_duration: float | None = None
+    file_path: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> TrackEntry:
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+    @classmethod
+    def from_tracks(cls, spotify: Track | None = None, hifi: Track | None = None, file_path: str | None = None) -> TrackEntry:
+        spotify = spotify or Track()
+        hifi = hifi or Track()
+        return cls(
+            isrc=spotify.isrc or hifi.isrc,
+            spotify_id=spotify.id,
+            spotify_title=spotify.title,
+            spotify_artist=spotify.artist,
+            spotify_album=spotify.album,
+            spotify_track_number=spotify.track_number,
+            spotify_duration=spotify.duration,
+            hifi_id=hifi.id,
+            hifi_title=hifi.title,
+            hifi_artist=hifi.artist,
+            hifi_album=hifi.album,
+            hifi_track_number=hifi.track_number or 0,
+            hifi_duration=hifi.duration,
+            file_path=file_path,
+        )
 
 
 def get_db() -> TinyDB:
@@ -28,35 +73,14 @@ def _tracks(db: TinyDB) -> Table:
 # Writes
 # ---------------------------------------------------------------------------
 
-def save_track(
-    db: TinyDB,
-    track: dict,
-    file_path: str | None = None,
-) -> None:
+def save_track(db: TinyDB, record: TrackEntry) -> None:
     """Upsert a track record keyed by ISRC."""
-    isrc = track.get("isrc")
-    if not isrc:
-        logger.warning("Track %s has no ISRC, skipping persistence", track.get("hifi_id"))
+    if not record.isrc:
+        logger.warning("Track %s has no ISRC, skipping persistence", record.hifi_id)
         return
 
-    record = {
-        "isrc": isrc,
-        "spotify_id": track.get("spotify_id"),
-        "hifi_id": track.get("hifi_id"),
-        "hifi_title": track.get("hifi_title"),
-        "hifi_artist": track.get("hifi_artist"),
-        "hifi_album": track.get("hifi_album"),
-        "hifi_track_number": track.get("hifi_track_number") or 0,
-        "hifi_duration": track.get("hifi_duration"),
-        "spotify_title": track.get("spotify_title"),
-        "spotify_artist": track.get("spotify_artist"),
-        "spotify_album": track.get("spotify_album"),
-        "spotify_track_number": track.get("spotify_track_number"),
-        "spotify_duration": track.get("spotify_duration"),
-        "file_path": file_path,
-    }
-    _tracks(db).upsert(record, where("isrc") == isrc)
-    logger.debug("Saved track %s (ISRC=%s, file=%s)", track.get("hifi_id"), isrc, file_path)
+    _tracks(db).upsert(record.__dict__, where("isrc") == record.isrc)
+    logger.debug("Saved track %s (ISRC=%s, file=%s)", record.hifi_id, record.isrc, record.file_path)
 
 
 
@@ -64,33 +88,33 @@ def save_track(
 # Reads
 # ---------------------------------------------------------------------------
 
-def get_track(db: TinyDB, isrc: str) -> dict | None:
+def get_track(db: TinyDB, isrc: str) -> TrackEntry | None:
     """Look up a track by ISRC. Returns None if not found."""
     results = _tracks(db).search(where("isrc") == isrc)
-    return results[0] if results else None
+    return TrackEntry.from_dict(results[0]) if results else None
 
 
-def get_all_tracks(db: TinyDB) -> list[dict]:
+def get_all_tracks(db: TinyDB) -> list[TrackEntry]:
     """Return all records."""
-    return _tracks(db).all()
+    return [TrackEntry.from_dict(r) for r in _tracks(db).all()]
 
 
-def get_downloaded_tracks(db: TinyDB) -> list[dict]:
+def get_downloaded_tracks(db: TinyDB) -> list[TrackEntry]:
     """Return records with a file_path (successfully downloaded)."""
-    return _tracks(db).search(where("file_path").test(lambda v: v is not None))
+    return [TrackEntry.from_dict(r) for r in _tracks(db).search(where("file_path").test(lambda v: v is not None))]
 
 
-def get_failed_tracks(db: TinyDB) -> list[dict]:
+def get_failed_tracks(db: TinyDB) -> list[TrackEntry]:
     """Return records where the hifi match was found but download failed."""
-    return _tracks(db).search(
+    return [TrackEntry.from_dict(r) for r in _tracks(db).search(
         where("hifi_id").test(lambda v: v is not None)
         & where("file_path").test(lambda v: v is None)
-    )
+    )]
 
 
-def get_all_nomatch(db: TinyDB) -> list[dict]:
+def get_all_nomatch(db: TinyDB) -> list[TrackEntry]:
     """Return records with no hifi match."""
-    return _tracks(db).search(where("hifi_id").test(lambda v: v is None))
+    return [TrackEntry.from_dict(r) for r in _tracks(db).search(where("hifi_id").test(lambda v: v is None))]
 
 
 # ---------------------------------------------------------------------------
@@ -100,24 +124,34 @@ def get_all_nomatch(db: TinyDB) -> list[dict]:
 PLAYLISTS_TABLE = "playlists"
 
 
+@dataclass
+class PlaylistEntry:
+    spotify_playlist_id: str
+    spotify_track_id: str
+    hifi_track_id: int | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> PlaylistEntry:
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
+
+
 def _playlists(db: TinyDB) -> Table:
     return db.table(PLAYLISTS_TABLE)
 
 
-def save_playlist_track(
-    db: TinyDB, playlist_id: str, spotify_id: str, track_id: int | None = None
-) -> None:
-    """Upsert a track entry for a playlist, keyed by (playlist_id, spotify_id)."""
+def save_playlist_track(db: TinyDB, entry: PlaylistEntry) -> None:
+    """Upsert a playlist entry keyed by (spotify_playlist_id, spotify_track_id)."""
     _playlists(db).upsert(
-        {"playlist_id": playlist_id, "spotify_id": spotify_id, "track_id": track_id},
-        (where("playlist_id") == playlist_id) & (where("spotify_id") == spotify_id),
+        entry.__dict__,
+        (where("spotify_playlist_id") == entry.spotify_playlist_id) & (where("spotify_track_id") == entry.spotify_track_id),
     )
-    logger.debug("Saved playlist track: playlist=%s spotify=%s hifi=%s", playlist_id, spotify_id, track_id)
+    logger.debug("Saved playlist track: playlist=%s spotify=%s hifi=%s", entry.spotify_playlist_id, entry.spotify_track_id, entry.hifi_track_id)
 
 
-def get_playlist_tracks_db(db: TinyDB, playlist_id: str) -> list[dict]:
+def get_playlist_tracks_db(db: TinyDB, spotify_playlist_id: str) -> list[PlaylistEntry]:
     """Return all track entries for a playlist."""
-    return _playlists(db).search(where("playlist_id") == playlist_id)
+    return [PlaylistEntry.from_dict(r) for r in _playlists(db).search(where("spotify_playlist_id") == spotify_playlist_id)]
 
 
 def is_track_downloaded(db: TinyDB, spotify_id: str) -> bool:

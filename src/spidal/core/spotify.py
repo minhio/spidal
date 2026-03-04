@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 import requests
 
 from spidal.core.config import SPOTIFY_API_URL, Config
+from spidal.core.track import Track
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +44,18 @@ def _validate_track_id(track_id: str) -> str:
     return track_id
 
 
-def parse_track_id(track: str) -> str:
-    parsed = urlparse(track)
+def parse_track_id(url_or_id: str) -> str:
+    parsed = urlparse(url_or_id)
     if parsed.scheme in ("http", "https"):
         if parsed.hostname != "open.spotify.com":
             logger.error("Invalid Spotify URL host: %s", parsed.hostname)
-            raise ValueError(f"Not a Spotify URL: {track}")
+            raise ValueError(f"Not a Spotify URL: {url_or_id}")
         parts = parsed.path.rstrip("/").split("/")
         if len(parts) < 3 or parts[-2] != "track":
-            logger.error("URL is not a Spotify track link: %s", track)
-            raise ValueError(f"Not a Spotify track URL: {track}")
+            logger.error("URL is not a Spotify track link: %s", url_or_id)
+            raise ValueError(f"Not a Spotify track URL: {url_or_id}")
         return _validate_track_id(parts[-1])
-    return _validate_track_id(track)
+    return _validate_track_id(url_or_id)
 
 
 def _check_response(resp: requests.Response) -> None:
@@ -77,7 +78,21 @@ def _check_response(resp: requests.Response) -> None:
     resp.raise_for_status()
 
 
-def get_track(config: Config, track: str) -> dict:
+def _parse_track(data: dict) -> Track:
+    artists = data.get("artists") or []
+    artist = artists[0].get("name") if artists else None
+    return Track(
+        id=data.get("id"),
+        isrc=(data.get("external_ids") or {}).get("isrc"),
+        title=data.get("name"),
+        artist=artist,
+        album=(data.get("album") or {}).get("name"),
+        track_number=data.get("track_number"),
+        duration=data.get("duration_ms"),
+    )
+
+
+def get_track(config: Config, track: str) -> Track:
     track_id = parse_track_id(track)
     if not config.spotify_token:
         raise PermissionError("No Spotify token configured")
@@ -97,7 +112,7 @@ def get_track(config: Config, track: str) -> dict:
         logger.error(msg)
         raise LookupError(msg)
     _check_response(resp)
-    return resp.json()
+    return _parse_track(resp.json())
 
 
 def _auth_headers(config: Config) -> dict[str, str]:
@@ -157,15 +172,15 @@ def get_album_tracks(config: Config, album_id: str) -> tuple[dict, list[dict]]:
     return album, tracks
 
 
-def get_tracks(config: Config, track_ids: list[str]) -> list[dict]:
+def get_tracks(config: Config, track_ids: list[str]) -> list[Track]:
     """Fetch full track objects from Spotify in batches of 50.
 
     Returns:
-        List of full track dicts (with external_ids/ISRC).
+        List of Track objects (with ISRC).
     """
     logger.info("Fetching %d Spotify track(s) in batches", len(track_ids))
     headers = _auth_headers(config)
-    results: list[dict] = []
+    results: list[Track] = []
     for i in range(0, len(track_ids), 50):
         batch = track_ids[i : i + 50]
         logger.debug("Fetching track batch %d-%d", i + 1, i + len(batch))
@@ -175,34 +190,26 @@ def get_tracks(config: Config, track_ids: list[str]) -> list[dict]:
             params={"ids": ",".join(batch)},
         )
         _check_response(resp)
-        results.extend(t for t in resp.json().get("tracks", []) if t)
+        results.extend(_parse_track(t) for t in resp.json().get("tracks", []) if t)
     logger.info("Fetched %d full track objects", len(results))
     return results
 
 
-def get_playlist_tracks(config: Config, playlist_id: str) -> list[dict]:
-    """Fetch all tracks from a Spotify playlist.
-
-    Returns:
-        List of track dicts (unwrapped from items[].track).
-    """
+def get_playlist_tracks(config: Config, playlist_id: str) -> list[Track]:
+    """Fetch all tracks from a Spotify playlist."""
     logger.info("Fetching tracks for playlist: %s", playlist_id)
     url = f"{SPOTIFY_API_URL}/playlists/{playlist_id}/tracks?limit=100"
     items = _paginate(config, url)
-    tracks = [item["track"] for item in items if item.get("track")]
+    tracks = [_parse_track(item["track"]) for item in items if item.get("track")]
     logger.info("Playlist %s: %d track(s)", playlist_id, len(tracks))
     return tracks
 
 
-def get_liked_tracks(config: Config) -> list[dict]:
-    """Fetch all liked/saved tracks from the user's library.
-
-    Returns:
-        List of track dicts (unwrapped from items[].track).
-    """
+def get_liked_tracks(config: Config) -> list[Track]:
+    """Fetch all liked/saved tracks from the user's library."""
     logger.info("Fetching liked tracks")
     url = f"{SPOTIFY_API_URL}/me/tracks?limit=50"
     items = _paginate(config, url)
-    tracks = [item["track"] for item in items if item.get("track")]
+    tracks = [_parse_track(item["track"]) for item in items if item.get("track")]
     logger.info("Liked tracks: %d", len(tracks))
     return tracks
