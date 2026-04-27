@@ -30,25 +30,11 @@ from spidal.persistence import (
     get_downloaded_tracks,
     get_failed_tracks,
     get_playlist_download,
-    save_nomatch,
     save_playlist_download,
 )
 from spidal.spotify import get_playlist_tracks, get_user_playlists
 
 logger = logging.getLogger(__name__)
-
-
-def _match_and_save_nomatch(config: Config, spotify_tracks: list[dict]) -> list[dict]:
-    """Match Spotify tracks by ISRC and save unmatched records to the nomatch DB."""
-    from spidal.hifi import match_spotify_tracks
-
-    matched, unmatched = match_spotify_tracks(config, spotify_tracks)
-    if unmatched:
-        db = get_db()
-        for st in unmatched:
-            save_nomatch(db, st)
-        db.close()
-    return matched
 
 _SPOTIFY_CONSOLE_URL = "https://developer.spotify.com"
 
@@ -363,7 +349,7 @@ class SpotifyWidget(Vertical):
 
     @work(thread=True)
     def _do_download_playlist(self, playlist: dict) -> None:
-        from spidal.download import download_tracks
+        from spidal.download import download_spotify_tracks
 
         playlist_id = playlist.get("id", "")
         playlist_name = playlist.get("name") or "Untitled"
@@ -376,26 +362,22 @@ class SpotifyWidget(Vertical):
             self.app.call_from_thread(self._show_token_setup, True)
             return
 
-        self._set_status(f" Matching {len(spotify_tracks)} tracks...")
-        matched = _match_and_save_nomatch(self.config, spotify_tracks)
-
-        if not matched:
-            self._set_status(" No tracks could be matched.")
-            return
-
-        self._set_status(f" Matched {len(matched)}/{len(spotify_tracks)}. Downloading...")
+        self._set_status(f" Processing {len(spotify_tracks)} tracks...")
 
         def _on_progress(
             current: int, total: int, status: str, _path: str | None
         ) -> None:
             self.app.call_from_thread(self._show_progress, total, current)
 
-        counts = download_tracks(self.config, matched, _on_progress)
+        counts = download_spotify_tracks(self.config, spotify_tracks, _on_progress)
         total = playlist.get("tracks", {}).get("total") or len(spotify_tracks)
         self.app.call_from_thread(
             self._mark_playlist_downloaded, playlist, counts["downloaded"], total
         )
-        msg = f" Done: {counts['downloaded']} downloaded, {counts['failed']} failed"
+        msg = (
+            f" Done: {counts['downloaded']} downloaded, "
+            f"{counts['failed']} failed, {counts['no_match']} no match"
+        )
         self._set_status(msg)
         self.app.call_from_thread(self.app.notify, msg.strip())
 
@@ -436,6 +418,7 @@ class LibraryWidget(Vertical):
         Binding("d", "switch_tab('downloaded')", "Downloaded"),
         Binding("n", "switch_tab('nomatch')", "No Match"),
         Binding("f", "switch_tab('failed')", "Failed"),
+        Binding("a", "reprocess_all_failed", "Retry All Failed"),
     ]
 
     DEFAULT_CSS = """
@@ -672,6 +655,39 @@ class LibraryWidget(Vertical):
     def action_switch_tab(self, tab_id: str) -> None:
         self.query_one("#library-tabs", TabbedContent).active = tab_id
 
+    def action_reprocess_all_failed(self) -> None:
+        if not self._failed_tracks:
+            self._update_status(" No failed tracks to retry")
+            return
+        count = len(self._failed_tracks)
+        self.app.push_screen(
+            ConfirmScreen(f"Retry all {count} failed tracks?"),
+            callback=lambda confirmed: self._do_reprocess_all_failed()
+            if confirmed
+            else None,
+        )
+
+    @work(thread=True)
+    def _do_reprocess_all_failed(self) -> None:
+        from spidal.download import download_tracks
+
+        tracks = list(self._failed_tracks)
+        total = len(tracks)
+        logger.info("Reprocessing all %d failed tracks", total)
+
+        def _on_progress(
+            current: int, _total: int, status: str, path: str | None
+        ) -> None:
+            track = tracks[current - 1]
+            label = f"{track.get('artist') or '?'} - {track.get('title') or '?'}"
+            self._set_status(f" [{current}/{total}] {status}: {label}")
+
+        counts = download_tracks(self.config, tracks, on_progress=_on_progress)
+        self._set_status(
+            f" Done: {counts['downloaded']} downloaded, {counts['failed']} failed"
+        )
+        self._load()
+
 
 class LogsWidget(Vertical):
     """Displays the spidal log file."""
@@ -886,7 +902,7 @@ class GetWidget(Vertical):
     def _handle_spotify_url(
         self, url: str, resource_type: str, resource_id: str
     ) -> tuple[int, int]:
-        from spidal.download import download_track, download_tracks
+        from spidal.download import download_spotify_tracks, download_track
 
         if resource_type == "track":
             from spidal.hifi import match_track
@@ -918,17 +934,15 @@ class GetWidget(Vertical):
             full_tracks = get_tracks(self.config, track_ids)
             for t in full_tracks:
                 t.setdefault("album", {})["name"] = album_name
-            matched = _match_and_save_nomatch(self.config, full_tracks)
-            counts = download_tracks(self.config, matched)
-            return counts["downloaded"], counts["failed"]
+            counts = download_spotify_tracks(self.config, full_tracks)
+            return counts["downloaded"], counts["failed"] + counts["no_match"]
 
         if resource_type == "playlist":
             from spidal.spotify import get_playlist_tracks
 
             tracks = get_playlist_tracks(self.config, resource_id)
-            matched = _match_and_save_nomatch(self.config, tracks)
-            counts = download_tracks(self.config, matched)
-            return counts["downloaded"], counts["failed"]
+            counts = download_spotify_tracks(self.config, tracks)
+            return counts["downloaded"], counts["failed"] + counts["no_match"]
 
         return 0, 1
 

@@ -9,14 +9,26 @@ from pathlib import Path
 import requests
 
 from spidal.config import Config
-from spidal.hifi import iter_stream_urls
-from spidal.persistence import get_db, save_track
+from spidal.hifi import iter_spotify_matches, iter_stream_urls
+from spidal.persistence import get_db, save_nomatch, save_track
 from spidal.tagging import tag_flac, tag_m4a, tag_ogg, tag_webm
 
 logger = logging.getLogger(__name__)
 
 MIN_FILE_SIZE = 50 * 1024  # 50 KB
 MAX_RETRIES = 3
+
+# Extensions _sniff_extension may produce; treated as "already downloaded".
+AUDIO_EXTENSIONS = (".flac", ".m4a", ".ogg", ".webm", ".mp3")
+
+
+def _find_existing(file_path: Path) -> Path | None:
+    """Return an existing sibling with the same stem and any audio extension."""
+    for ext in AUDIO_EXTENSIONS:
+        candidate = file_path.with_suffix(ext)
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _sniff_extension(path: Path) -> str:
@@ -32,7 +44,11 @@ def _sniff_extension(path: Path) -> str:
             return ".ogg"
         if header[:4] == b"\x1a\x45\xdf\xa3":
             return ".webm"
-        if header[:3] == b"ID3" or header[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        if header[:3] == b"ID3" or header[:2] in (
+            b"\xff\xfb",
+            b"\xff\xf3",
+            b"\xff\xf2",
+        ):
             return ".mp3"
     except OSError:
         pass
@@ -206,7 +222,11 @@ def _tag_file(
     album: str,
 ) -> None:
     """Tag the downloaded file using the appropriate tagger for its format."""
-    if config.disable_tagging and config.disable_tagging.lower() not in ("false", "0", ""):
+    if config.disable_tagging and config.disable_tagging.lower() not in (
+        "false",
+        "0",
+        "",
+    ):
         logger.info("Tagging disabled, skipping: %s", file_path.name)
         return
     _TAGGERS = {
@@ -253,10 +273,20 @@ def download_track(
     download_dir = Path(config.download_dir or "downloads")
     file_path = download_dir / safe_artist / safe_album / filename
 
-    if file_path.exists():
-        logger.info("Already exists: %s", file_path)
-        _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
-        return "skipped", str(file_path)
+    existing = _find_existing(file_path)
+    if existing is not None:
+        logger.info("Already exists: %s", existing)
+        _persist(
+            track,
+            track_id,
+            title,
+            artist,
+            album,
+            track_number,
+            "downloaded",
+            str(existing),
+        )
+        return "skipped", str(existing)
 
     try:
         streams = iter_stream_urls(config, track_id)
@@ -281,7 +311,16 @@ def download_track(
         logger.info("Renamed to %s (actual format: %s)", file_path.name, actual_ext)
 
     logger.info("Downloaded: %s", file_path)
-    _persist(track, track_id, title, artist, album, track_number, "downloaded", str(file_path))
+    _persist(
+        track,
+        track_id,
+        title,
+        artist,
+        album,
+        track_number,
+        "downloaded",
+        str(file_path),
+    )
     _tag_file(config, file_path, track, artist, album)
 
     return "downloaded", str(file_path)
@@ -324,5 +363,60 @@ def download_tracks(
             if delay:
                 logger.debug("Waiting %ds before next track", delay)
                 time.sleep(delay)
+
+    return counts
+
+
+def download_spotify_tracks(
+    config: Config,
+    spotify_tracks: list[dict],
+    on_progress: Callable[[int, int, str, str | None], None] | None = None,
+) -> dict[str, int]:
+    """Match each Spotify track by ISRC and download immediately on match.
+
+    Unmatched tracks are saved to the nomatch DB as they are encountered, so
+    progress survives an early exit. Status passed to on_progress is one of
+    "downloaded", "failed", or "no_match".
+
+    Returns:
+        Dict with counts: {"downloaded": N, "failed": N, "no_match": N}.
+    """
+    counts: dict[str, int] = {"downloaded": 0, "failed": 0, "no_match": 0}
+    total = len(spotify_tracks)
+    db = None
+    last_downloaded_idx = -1
+
+    try:
+        for i, (st, matched) in enumerate(iter_spotify_matches(config, spotify_tracks)):
+            if matched is None:
+                if db is None:
+                    db = get_db()
+                save_nomatch(db, st)
+                counts["no_match"] += 1
+                if on_progress:
+                    on_progress(i + 1, total, "no_match", None)
+                continue
+
+            if last_downloaded_idx >= 0:
+                delay = int(config.download_delay or TRACK_DELAY)
+                if delay:
+                    logger.debug("Waiting %ds before next track", delay)
+                    time.sleep(delay)
+
+            artist = matched.get("artist") or "Unknown"
+            album = matched.get("album") or "Unknown"
+            status, path = download_track(config, matched, artist, album)
+            display_status = (
+                "downloaded" if status in ("downloaded", "skipped") else "failed"
+            )
+            counts[display_status] += 1
+            if status == "downloaded":
+                last_downloaded_idx = i
+
+            if on_progress:
+                on_progress(i + 1, total, display_status, path)
+    finally:
+        if db is not None:
+            db.close()
 
     return counts

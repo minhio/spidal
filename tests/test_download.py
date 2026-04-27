@@ -1,5 +1,12 @@
 from spidal.config import Config
-from spidal.download import _cleanup, _download_dash, _download_direct, _sanitize, download_track, download_tracks
+from spidal.download import (
+    _cleanup,
+    _download_dash,
+    _download_direct,
+    _sanitize,
+    download_track,
+    download_tracks,
+)
 
 
 class TestSanitize:
@@ -34,6 +41,22 @@ class TestDownloadTrack:
 
         result = download_track(config, track, "Artist", "Album")
         assert result == ("skipped", str(dest))
+
+    def test_skips_existing_file_with_other_audio_extension(self, mocker, tmp_path):
+        """A prior download saved as .m4a (post-sniff rename) must not trigger a re-download."""
+        config = self._config(tmp_path)
+        track = {"id": 1, "title": "Song", "track_number": 1}
+
+        existing = tmp_path / "Artist" / "Album" / "01 - Song.m4a"
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(b"existing")
+
+        mock_streams = mocker.patch("spidal.download.iter_stream_urls")
+
+        status, path = download_track(config, track, "Artist", "Album")
+        assert status == "skipped"
+        assert path == str(existing)
+        mock_streams.assert_not_called()
 
     def test_direct_download_success(self, mocker, tmp_path):
         config = self._config(tmp_path)
@@ -177,10 +200,12 @@ class TestDownloadTrack:
         # First URL fails (small file), second succeeds
         mocker.patch(
             "spidal.download.iter_stream_urls",
-            return_value=iter([
-                "https://cdn.example.com/bad.flac",
-                "https://cdn.example.com/good.flac",
-            ]),
+            return_value=iter(
+                [
+                    "https://cdn.example.com/bad.flac",
+                    "https://cdn.example.com/good.flac",
+                ]
+            ),
         )
 
         small_content = b"x" * 100
@@ -214,13 +239,22 @@ class TestDownloadTrack:
         chunk = b"x" * (60 * 1024)
         mock_resp = mocker.Mock()
         mock_resp.ok = True
-        mock_resp.headers = {"content-type": "audio/flac", "content-length": str(len(chunk))}
+        mock_resp.headers = {
+            "content-type": "audio/flac",
+            "content-length": str(len(chunk)),
+        }
         mock_resp.iter_content.return_value = [chunk]
         mocker.patch("spidal.download.requests.get", return_value=mock_resp)
         mocker.patch("spidal.download.tag_flac")
 
         calls = []
-        download_track(config, track, "Artist", "Album", on_progress=lambda w, t: calls.append((w, t)))
+        download_track(
+            config,
+            track,
+            "Artist",
+            "Album",
+            on_progress=lambda w, t: calls.append((w, t)),
+        )
         assert len(calls) == 1
         assert calls[0] == (len(chunk), len(chunk))
 
@@ -305,6 +339,7 @@ class TestDownloadDash:
 
     def test_retries_on_request_exception(self, mocker, tmp_path):
         import requests as req
+
         good_resp = mocker.Mock()
         good_resp.ok = True
         good_resp.content = b"data"
@@ -326,7 +361,13 @@ class TestDownloadTracks:
         return config
 
     def _make_track(self, **overrides):
-        base = {"id": 1, "title": "Song", "track_number": 1, "artist": "Artist", "album": "Album"}
+        base = {
+            "id": 1,
+            "title": "Song",
+            "track_number": 1,
+            "artist": "Artist",
+            "album": "Album",
+        }
         base.update(overrides)
         return base
 

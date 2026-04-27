@@ -117,31 +117,14 @@ def _download_spotify_track(config: Config, url: str) -> None:
         raise typer.Exit(code=1)
 
 
-def _match_spotify_tracks(config: Config, spotify_tracks: list[dict]) -> list[dict]:
-    """Match Spotify tracks by ISRC, echoing results and saving unmatched to DB."""
-    from spidal.hifi import match_spotify_tracks as _do_match
-    from spidal.persistence import get_db, save_nomatch
-
-    matched, unmatched = _do_match(config, spotify_tracks)
-    for st in unmatched:
-        artists = ", ".join(a["name"] for a in st.get("artists", []))
-        title = st.get("name", "Unknown")
-        isrc = st.get("external_ids", {}).get("isrc")
-        if not isrc:
-            typer.echo(f"  Skipping (no ISRC): {artists} - {title}")
-        else:
-            typer.echo(f"  No match: {artists} - {title} (ISRC: {isrc})")
-    if unmatched:
-        db = get_db()
-        for st in unmatched:
-            save_nomatch(db, st)
-        db.close()
-    return matched
+def _spotify_progress(i: int, total: int, status: str, path: str | None) -> None:
+    label = path or status
+    typer.echo(f"  [{i}/{total}] {status}: {label}")
 
 
 def _download_spotify_album(config: Config, album_id: str) -> None:
-    """Download all tracks from a Spotify album."""
-    from spidal.download import download_tracks
+    """Download all tracks from a Spotify album, matching and downloading per track."""
+    from spidal.download import download_spotify_tracks
     from spidal.spotify import get_album_tracks, get_tracks
 
     album_info, tracks = _with_spotify_auth(config, get_album_tracks, album_id)
@@ -158,71 +141,47 @@ def _download_spotify_album(config: Config, album_id: str) -> None:
     for t in full_tracks:
         t.setdefault("album", {})["name"] = album_name
 
-    typer.echo("Matching tracks...")
-    matched = _match_spotify_tracks(config, full_tracks)
-
-    if not matched:
-        typer.echo("No tracks could be matched.")
+    counts = download_spotify_tracks(config, full_tracks, on_progress=_spotify_progress)
+    typer.echo(
+        f"Done: {counts['downloaded']} downloaded, "
+        f"{counts['failed']} failed, {counts['no_match']} no match"
+    )
+    if not counts["downloaded"]:
         raise typer.Exit(code=1)
-
-    typer.echo(f"Matched {len(matched)}/{len(tracks)} tracks. Downloading...")
-
-    def on_progress(i: int, total: int, status: str, path: str | None) -> None:
-        label = path or "failed"
-        typer.echo(f"  [{i}/{total}] {status}: {label}")
-
-    counts = download_tracks(config, matched, on_progress=on_progress)
-    typer.echo(f"Done: {counts['downloaded']} downloaded, {counts['failed']} failed")
 
 
 def _download_spotify_playlist(config: Config, playlist_id: str) -> None:
-    """Download all tracks from a Spotify playlist."""
-    from spidal.download import download_tracks
+    """Download all tracks from a Spotify playlist, matching and downloading per track."""
+    from spidal.download import download_spotify_tracks
     from spidal.spotify import get_playlist_tracks
 
     tracks = _with_spotify_auth(config, get_playlist_tracks, playlist_id)
 
     typer.echo(f"Playlist: {len(tracks)} tracks")
-    typer.echo("Matching tracks...")
-    matched = _match_spotify_tracks(config, tracks)
-
-    if not matched:
-        typer.echo("No tracks could be matched.")
+    counts = download_spotify_tracks(config, tracks, on_progress=_spotify_progress)
+    typer.echo(
+        f"Done: {counts['downloaded']} downloaded, "
+        f"{counts['failed']} failed, {counts['no_match']} no match"
+    )
+    if not counts["downloaded"]:
         raise typer.Exit(code=1)
-
-    typer.echo(f"Matched {len(matched)}/{len(tracks)} tracks. Downloading...")
-
-    def on_progress(i: int, total: int, status: str, path: str | None) -> None:
-        label = path or "failed"
-        typer.echo(f"  [{i}/{total}] {status}: {label}")
-
-    counts = download_tracks(config, matched, on_progress=on_progress)
-    typer.echo(f"Done: {counts['downloaded']} downloaded, {counts['failed']} failed")
 
 
 def _download_liked(config: Config) -> None:
-    """Download all liked/saved tracks from Spotify."""
-    from spidal.download import download_tracks
+    """Download all liked/saved tracks from Spotify, matching and downloading per track."""
+    from spidal.download import download_spotify_tracks
     from spidal.spotify import get_liked_tracks
 
     tracks = _with_spotify_auth(config, get_liked_tracks)
 
     typer.echo(f"Liked tracks: {len(tracks)}")
-    typer.echo("Matching tracks...")
-    matched = _match_spotify_tracks(config, tracks)
-
-    if not matched:
-        typer.echo("No tracks could be matched.")
+    counts = download_spotify_tracks(config, tracks, on_progress=_spotify_progress)
+    typer.echo(
+        f"Done: {counts['downloaded']} downloaded, "
+        f"{counts['failed']} failed, {counts['no_match']} no match"
+    )
+    if not counts["downloaded"]:
         raise typer.Exit(code=1)
-
-    typer.echo(f"Matched {len(matched)}/{len(tracks)} tracks. Downloading...")
-
-    def on_progress(i: int, total: int, status: str, path: str | None) -> None:
-        label = path or "failed"
-        typer.echo(f"  [{i}/{total}] {status}: {label}")
-
-    counts = download_tracks(config, matched, on_progress=on_progress)
-    typer.echo(f"Done: {counts['downloaded']} downloaded, {counts['failed']} failed")
 
 
 def get(

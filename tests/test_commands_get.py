@@ -66,83 +66,171 @@ class TestGetCommandRouting:
         assert "Unsupported URL" in result.output
 
 
-class TestMatchSpotifyTracks:
-    """Tests for _match_spotify_tracks — ISRC matching and nomatch persistence."""
+class TestDownloadSpotifyTracks:
+    """Tests for download_spotify_tracks — interleaved match + download per track."""
 
-    from spidal.commands.get import _match_spotify_tracks
-
-    def _spotify_track(self, isrc="USTEST123456", title="Song", artist="Artist"):
+    def _spotify_track(self, isrc="USTEST123456", title="Song", artist="Artist", sp_id="sp123"):
         return {
-            "id": "sp123",
+            "id": sp_id,
             "name": title,
             "artists": [{"name": artist}],
             "album": {"name": "Album"},
             "external_ids": {"isrc": isrc},
         }
 
-    def test_matches_tracks_by_isrc(self, mocker):
-        from spidal.commands.get import _match_spotify_tracks
+    def test_matched_tracks_are_downloaded(self, mocker):
+        from spidal.download import download_spotify_tracks
 
         config = _config()
         hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": "USTEST123456"}
 
         mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
-        mocker.patch("spidal.persistence.get_db")
-        mocker.patch("spidal.persistence.save_nomatch")
+        mocker.patch("spidal.download.get_db")
+        mocker.patch("spidal.download.save_nomatch")
+        mock_dl = mocker.patch(
+            "spidal.download.download_track", return_value=("downloaded", "/p.flac")
+        )
 
-        result = _match_spotify_tracks(config, [self._spotify_track()])
-        assert len(result) == 1
-        assert result[0]["id"] == 1
+        counts = download_spotify_tracks(config, [self._spotify_track()])
+        assert counts == {"downloaded": 1, "failed": 0, "no_match": 0}
+        mock_dl.assert_called_once()
 
-    def test_skips_tracks_without_isrc(self, mocker):
-        from spidal.commands.get import _match_spotify_tracks
+    def test_skipped_tracks_count_as_downloaded(self, mocker):
+        from spidal.download import download_spotify_tracks
+
+        config = _config()
+        hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": "USTEST123456"}
+        mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
+        mocker.patch("spidal.download.get_db")
+        mocker.patch("spidal.download.save_nomatch")
+        mocker.patch(
+            "spidal.download.download_track", return_value=("skipped", "/p.flac")
+        )
+
+        counts = download_spotify_tracks(config, [self._spotify_track()])
+        assert counts["downloaded"] == 1
+
+    def test_tracks_without_isrc_count_as_no_match(self, mocker):
+        from spidal.download import download_spotify_tracks
 
         config = _config()
         mocker.patch("spidal.hifi.match_track")
-        mocker.patch("spidal.persistence.get_db")
-        mocker.patch("spidal.persistence.save_nomatch")
+        mock_db = mocker.Mock()
+        mocker.patch("spidal.download.get_db", return_value=mock_db)
+        mock_save = mocker.patch("spidal.download.save_nomatch")
+        mock_dl = mocker.patch("spidal.download.download_track")
 
         track = self._spotify_track()
         track["external_ids"] = {}
-        result = _match_spotify_tracks(config, [track])
-        assert result == []
+        counts = download_spotify_tracks(config, [track])
+        assert counts == {"downloaded": 0, "failed": 0, "no_match": 1}
+        mock_save.assert_called_once()
+        mock_dl.assert_not_called()
 
-    def test_saves_unmatched_to_nomatch(self, mocker):
-        from spidal.commands.get import _match_spotify_tracks
+    def test_unmatched_tracks_saved_to_nomatch(self, mocker):
+        from spidal.download import download_spotify_tracks
 
         config = _config()
         mocker.patch("spidal.hifi.match_track", return_value=None)
         mock_db = mocker.Mock()
-        mocker.patch("spidal.persistence.get_db", return_value=mock_db)
-        mock_save = mocker.patch("spidal.persistence.save_nomatch")
+        mocker.patch("spidal.download.get_db", return_value=mock_db)
+        mock_save = mocker.patch("spidal.download.save_nomatch")
+        mock_dl = mocker.patch("spidal.download.download_track")
 
-        _match_spotify_tracks(config, [self._spotify_track()])
+        counts = download_spotify_tracks(config, [self._spotify_track()])
+        assert counts["no_match"] == 1
         mock_save.assert_called_once()
+        mock_dl.assert_not_called()
 
-    def test_returns_empty_when_all_unmatched(self, mocker):
-        from spidal.commands.get import _match_spotify_tracks
+    def test_failed_downloads_count_as_failed(self, mocker):
+        from spidal.download import download_spotify_tracks
 
         config = _config()
-        mocker.patch("spidal.hifi.match_track", return_value=None)
-        mocker.patch("spidal.persistence.get_db", return_value=mocker.Mock())
-        mocker.patch("spidal.persistence.save_nomatch")
+        hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": "USTEST123456"}
+        mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
+        mocker.patch("spidal.download.get_db")
+        mocker.patch("spidal.download.save_nomatch")
+        mocker.patch("spidal.download.download_track", return_value=("failed", None))
 
-        result = _match_spotify_tracks(config, [self._spotify_track(), self._spotify_track(isrc="OTHER")])
-        assert result == []
+        counts = download_spotify_tracks(config, [self._spotify_track()])
+        assert counts == {"downloaded": 0, "failed": 1, "no_match": 0}
 
-    def test_preserves_spotify_album_name(self, mocker):
-        from spidal.commands.get import _match_spotify_tracks
+    def test_interleaves_match_and_download(self, mocker):
+        """Ensure download_track is called between match_track calls, not after all matches."""
+        from spidal.download import download_spotify_tracks
+
+        config = _config()
+        order: list[str] = []
+
+        def fake_match(cfg, query, isrc):
+            order.append(f"match:{isrc}")
+            return {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": isrc}
+
+        def fake_dl(cfg, track, artist, album, on_progress=None):
+            order.append(f"download:{track['isrc']}")
+            return "downloaded", "/p.flac"
+
+        mocker.patch("spidal.hifi.match_track", side_effect=fake_match)
+        mocker.patch("spidal.download.download_track", side_effect=fake_dl)
+        mocker.patch("spidal.download.get_db")
+        mocker.patch("spidal.download.save_nomatch")
+
+        tracks = [
+            self._spotify_track(isrc="ISRC_A", sp_id="a"),
+            self._spotify_track(isrc="ISRC_B", sp_id="b"),
+        ]
+        download_spotify_tracks(config, tracks)
+        assert order == [
+            "match:ISRC_A",
+            "download:ISRC_A",
+            "match:ISRC_B",
+            "download:ISRC_B",
+        ]
+
+    def test_on_progress_fires_per_track(self, mocker):
+        from spidal.download import download_spotify_tracks
+
+        config = _config()
+        hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Album", "isrc": "USTEST123456"}
+        mocker.patch(
+            "spidal.hifi.match_track",
+            side_effect=[hifi_track, None],
+        )
+        mocker.patch("spidal.download.get_db", return_value=mocker.Mock())
+        mocker.patch("spidal.download.save_nomatch")
+        mocker.patch(
+            "spidal.download.download_track", return_value=("downloaded", "/p.flac")
+        )
+
+        calls: list[tuple[int, int, str]] = []
+        download_spotify_tracks(
+            config,
+            [self._spotify_track(isrc="A"), self._spotify_track(isrc="B")],
+            on_progress=lambda i, total, status, path: calls.append((i, total, status)),
+        )
+        assert calls == [(1, 2, "downloaded"), (2, 2, "no_match")]
+
+    def test_preserves_spotify_album_name_when_downloading(self, mocker):
+        from spidal.download import download_spotify_tracks
 
         config = _config()
         hifi_track = {"id": 1, "title": "Song", "artist": "Artist", "album": "Hifi Album", "isrc": "USTEST123456"}
         mocker.patch("spidal.hifi.match_track", return_value=hifi_track)
-        mocker.patch("spidal.persistence.get_db")
-        mocker.patch("spidal.persistence.save_nomatch")
+        mocker.patch("spidal.download.get_db")
+        mocker.patch("spidal.download.save_nomatch")
+
+        captured: dict[str, str] = {}
+
+        def fake_dl(cfg, track, artist, album, on_progress=None):
+            captured["album"] = album
+            return "downloaded", "/p.flac"
+
+        mocker.patch("spidal.download.download_track", side_effect=fake_dl)
 
         track = self._spotify_track()
         track["album"] = {"name": "Spotify Album"}
-        result = _match_spotify_tracks(config, [track])
-        assert result[0]["album"] == "Spotify Album"
+        download_spotify_tracks(config, [track])
+        assert captured["album"] == "Spotify Album"
 
 
 class TestDownloadMonochromeTrack:
